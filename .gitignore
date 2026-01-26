@@ -11,3 +11,5 @@ tmp.json
 .venv
 
 target/
+
+.DS_Store
