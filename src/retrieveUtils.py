@@ -11,7 +11,7 @@ class MercariScraper:
 def mercariLink(link) -> dict: 
     # Returns dict <string, list> where string is link, and list has attributes [fullTitle, image, content]
 
-    allItems = defaultdict(list)
+    allItems = {}
 
     driver = webdriver.Chrome()
     driver.get(link)
@@ -37,13 +37,6 @@ def mercariLink(link) -> dict:
 
         fullTitleScrape = item.find_element(By.CSS_SELECTOR, value = '.merItemThumbnail')
         fullTitle = fullTitleScrape.get_attribute("aria-label")
-
-        # debugger
-
-        # print(f"{content.replace('\n', ' ')}")
-        # print(fullTitle)
-        # print(link)
-        # print(image)
 
         allItems[link] = (fullTitle, image, content)
     # time.sleep(2) 

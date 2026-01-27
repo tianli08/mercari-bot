@@ -1,18 +1,16 @@
 import time
 import retrieveUtils
 import discord
+from constants import SEARCH_URLS
 
 def main():
-    # ccp = retrieveUtils.mercariLink("https://jp.mercari.com/search?keyword=carol%20christian%20poell&sort=created_time&order=desc")
-    # for key, value in ccp.items():
-    #     print(key, value)
 
     input("Press enter to start.")
-    ccp = retrieveUtils.mercariLink("https://jp.mercari.com/search?keyword=mihara&sort=created_time&order=desc")
+    ccp = retrieveUtils.mercariLink(SEARCH_URLS["Mihara"])
 
     while True:
         time.sleep(retrieveUtils.randomTime())
-        newccp = retrieveUtils.mercariLink("https://jp.mercari.com/search?keyword=mihara&sort=created_time&order=desc")
+        newccp = retrieveUtils.mercariLink(SEARCH_URLS["Mihara"])
         newProduct = retrieveUtils.newProductCheck(ccp, newccp)
         if newProduct:
             ccp = newccp
@@ -20,10 +18,6 @@ def main():
             for key, value in newProduct.items():
                 print("New product alert!: ", key)
                 discord.sendWebhook(key)
-
-        
-
-
 
 if __name__ == "__main__":
     main()
