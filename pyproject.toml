@@ -6,6 +6,31 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "discord-webhook>=1.4.1",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
     "python-dotenv>=1.2.1",
     "selenium>=4.40.0",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.14",
+]
+
+
+[tool.ruff]
+line-length = 120
+lint.select = ["E", "F", "I", "B", "Q", "W", "D"]
+# disable period requirement at the end of docstring
+lint.ignore = ["D400", "D415"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["prisma"]
+
+# follow similar docstring conventions as nvlint
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# disable undocumented public package for __init__ files
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["D104"]

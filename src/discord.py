@@ -1,11 +1,12 @@
 import os
-from dotenv import load_dotenv
+
 from discord_webhook import DiscordWebhook
-load_dotenv()
+
+from config import settings
+
 
 def sendWebhook(product):
-
-    miharaWebhook = os.getenv("MIHARA_CHANNEL")
+    miharaWebhook = settings.mihara_channel
 
     webhook = DiscordWebhook(url=miharaWebhook, content=product)
     return webhook.execute()
