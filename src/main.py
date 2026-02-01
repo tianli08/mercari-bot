@@ -1,11 +1,22 @@
 import time
-import retrieveUtils
+from urllib.parse import urlencode
+
 import discord
-from constants import SEARCH_URLS
+import retrieveUtils
+from config import app_config
+from constants import MERCARI_BASE_URL, SEARCH_URLS
+
 
 def main():
-
     input("Press enter to start.")
+
+    # can do something like this
+    for filter_data in app_config.filters:
+        for keyword in filter_data.keywords:
+            params = {"keyword": keyword, "sort": "created_time", "order": "desc"}
+            url = f"{MERCARI_BASE_URL}?{urlencode(params)}"
+            print(url)
+
     ccp = retrieveUtils.mercariLink(SEARCH_URLS["Mihara"])
 
     while True:
@@ -18,6 +29,7 @@ def main():
             for key, value in newProduct.items():
                 print("New product alert!: ", key)
                 discord.sendWebhook(key)
+
 
 if __name__ == "__main__":
     main()
