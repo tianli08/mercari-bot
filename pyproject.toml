@@ -8,6 +8,7 @@ dependencies = [
     "discord-webhook>=1.4.1",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
+    "pymongo[srv]>=4.16.0",
     "python-dotenv>=1.2.1",
     "selenium>=4.40.0",
 ]

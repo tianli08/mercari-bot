@@ -1,17 +1,16 @@
 import random
 from collections import defaultdict
+from urllib.parse import urlencode
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 
-
-class MercariScraper:
-    def __init__(self, driver):
-        self.driver = driver
+from config import app_config
+from constants import MERCARI_BASE_URL
 
 
 def mercariLink(link) -> dict:
-    # Returns dict <string, list> where string is link, and list has attributes [fullTitle, image, content]
+    # Returns dict <string, tuple> where string is link, and tuple has attributes (fullTitle, image, content)
 
     allItems = {}
 
@@ -46,7 +45,7 @@ def mercariLink(link) -> dict:
     try:
         print(f"Page Title: {driver.title}")
         pass
-    except:
+    except :
         print("Driver crashed or closed.")
 
     driver.quit()
@@ -71,3 +70,13 @@ def randomTime():  # Returns a random time from 60s to 120s to prevent bot detec
     sleep_seconds = random.gauss(90, 15)
     final_time = max(60, sleep_seconds)
     return final_time
+
+
+def linkGenerator() -> list[str]:  # Moved to over here, generates all the links.
+    allURLs = []
+    for filter_data in app_config.filters:
+        for keyword in filter_data.keywords:
+            params = {"keyword": keyword, "sort": "created_time", "order": "desc"}
+            url = f"{MERCARI_BASE_URL}?{urlencode(params)}"
+            allURLs.append(url)
+    return allURLs
