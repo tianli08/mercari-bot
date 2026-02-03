@@ -9,10 +9,10 @@ from config import app_config
 from constants import MERCARI_BASE_URL
 
 
-def mercariLink(link) -> dict:
+def mercari_link(link) -> dict:
     # Returns dict <string, tuple> where string is link, and tuple has attributes (fullTitle, image, content)
 
-    allItems = {}
+    all_items = {}
 
     driver = webdriver.Chrome()
     driver.get(link)
@@ -20,26 +20,26 @@ def mercariLink(link) -> dict:
     # Items in mercari are sorted by <li data-testid="item-cell" class="">
     # Item ID located in <a-"data-location">
     # Item name and price in <div class="merItemThumbnail>
-    totalItems = driver.find_elements(by=By.CSS_SELECTOR, value='[data-testid="item-cell"]')
+    total_items = driver.find_elements(by=By.CSS_SELECTOR, value='[data-testid="item-cell"]')
     # itemTest = driver.find_element(By.CSS_SELECTOR, '[data-testid="item-cell"]')
 
-    print(f"Amount of items is {len(totalItems)}")
+    print(f"Amount of items is {len(total_items)}")
 
-    for item in totalItems:
+    for item in total_items:
         content = item.text
         if not content.strip():
             continue
         # "Find the first anchor (link) tag inside this item"
-        linkScrape = item.find_element(by=By.TAG_NAME, value="a")
-        link = linkScrape.get_attribute("href")
+        link_scrape = item.find_element(by=By.TAG_NAME, value="a")
+        link = link_scrape.get_attribute("href")
 
-        imageScrape = item.find_element(by=By.TAG_NAME, value="img")
-        image = imageScrape.get_attribute("src")
+        image_scrape = item.find_element(by=By.TAG_NAME, value="img")
+        image = image_scrape.get_attribute("src")
 
-        fullTitleScrape = item.find_element(By.CSS_SELECTOR, value=".merItemThumbnail")
-        fullTitle = fullTitleScrape.get_attribute("aria-label")
+        full_title_scrape = item.find_element(By.CSS_SELECTOR, value=".merItemThumbnail")
+        full_title = full_title_scrape.get_attribute("aria-label")
 
-        allItems[link] = (fullTitle, image, content)
+        all_items[link] = (full_title, image, content)
     # time.sleep(2)
 
     try:
@@ -50,33 +50,33 @@ def mercariLink(link) -> dict:
 
     driver.quit()
 
-    return allItems
+    return all_items
 
 
-def newProductCheck(oldDict: dict, newDict: dict):  # Returns new item/items if there are any, None if not.
-    newItems = defaultdict(list)
+def new_product_check(old_dict: dict, new_dict: dict):  # Returns new item/items if there are any, None if not.
+    new_items = defaultdict(list)
 
-    newItemLinks = newDict.keys() - oldDict.keys()
+    new_item_links = new_dict.keys() - old_dict.keys()
 
-    for n in newItemLinks:
-        itemData = newDict[n]
+    for n in new_item_links:
+        item_data = new_dict[n]
 
-        newItems[n] = itemData
+        new_items[n] = item_data
 
-    return newItems
+    return new_items
 
 
-def randomTime():  # Returns a random time from 60s to 120s to prevent bot detection
+def random_time():  # Returns a random time from 60s to 120s to prevent bot detection
     sleep_seconds = random.gauss(90, 15)
     final_time = max(60, sleep_seconds)
     return final_time
 
 
-def linkGenerator() -> list[str]:  # Moved to over here, generates all the links.
-    allURLs = []
+def link_generator() -> list[str]:  # Moved to over here, generates all the links.
+    all_urls = []
     for filter_data in app_config.filters:
         for keyword in filter_data.keywords:
             params = {"keyword": keyword, "sort": "created_time", "order": "desc"}
             url = f"{MERCARI_BASE_URL}?{urlencode(params)}"
-            allURLs.append(url)
-    return allURLs
+            all_urls.append(url)
+    return all_urls
