@@ -1,34 +1,30 @@
-import time
-from urllib.parse import urlencode
 
-import discord
 import retrieveUtils
-from config import app_config
-from constants import MERCARI_BASE_URL, SEARCH_URLS
+from config import settings
+from database import insert_links
+from discord import send_webhook
 
 
 def main():
     input("Press enter to start.")
 
-    # can do something like this
-    for filter_data in app_config.filters:
-        for keyword in filter_data.keywords:
-            params = {"keyword": keyword, "sort": "created_time", "order": "desc"}
-            url = f"{MERCARI_BASE_URL}?{urlencode(params)}"
-            print(url)
+    all_urls = retrieveUtils.link_generator()
 
-    ccp = retrieveUtils.mercariLink(SEARCH_URLS["Mihara"])
+    # db concept:
+    # if link not in db, return the new product, else continue.
 
-    while True:
-        time.sleep(retrieveUtils.randomTime())
-        newccp = retrieveUtils.mercariLink(SEARCH_URLS["Mihara"])
-        newProduct = retrieveUtils.newProductCheck(ccp, newccp)
-        if newProduct:
-            ccp = newccp
-
-            for key, value in newProduct.items():
-                print("New product alert!: ", key)
-                discord.sendWebhook(key)
+    for url in all_urls:  # Currently code only goes through all json keywords once.
+        curr_entry = retrieveUtils.mercari_link(url)
+        for link, desc in curr_entry.items():  # TODO: implement pydantic for db insertion
+            if insert_links(
+                {
+                    "_id": link,  # specific for mongodb hashing
+                    "item_name": desc[0],
+                    "image": desc[1],
+                }
+            ):
+                send_webhook(link, desc, settings.designer_webhook)
+                # TODO: need to implment a potential faster way of checking items already sent, 15 item limit refresh is slow.
 
 
 if __name__ == "__main__":

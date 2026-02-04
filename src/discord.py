@@ -1,12 +1,14 @@
-import os
+from discord_webhook import DiscordEmbed, DiscordWebhook
 
-from discord_webhook import DiscordWebhook
+def send_webhook(link, desc, channel):
+    # Description is a tuple consisting of information about the product
+    full_title, image, content = desc
 
-from config import settings
+    webhook = DiscordWebhook(url=channel, rate_limit_retry=True)
 
+    embed = DiscordEmbed(title=full_title, url=link)
+    embed.set_image(image)
+    embed.set_footer(text="Static Archive")
+    webhook.add_embed(embed)
 
-def sendWebhook(product):
-    miharaWebhook = settings.mihara_channel
-
-    webhook = DiscordWebhook(url=miharaWebhook, content=product)
     return webhook.execute()

@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_nested_delimiter="__", env_file=env_files, extra="allow")
 
     mongo_uri: SecretStr
-    mihara_channel: str
+    designer_webhook: str
 
 
 settings = Settings()
