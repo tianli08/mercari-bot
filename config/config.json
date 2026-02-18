@@ -1,11 +1,12 @@
 {
   "filters": [
     { 
-      "name": "Mihara", 
-      "keywords": ["mihara yasuhiro", "ミハラヤスヒロ"] },
+      "name": "Mihara Yasuhiro", 
+      "keywords": ["ミハラヤスヒロ"] 
+    },
     {
       "name": "Carol Christian Poell",
-      "keywords": ["carol christian poell", "ccp"]
+      "keywords": ["carol christian poell"]
     },
     {
       "name": "TheSoloist",
@@ -13,3 +14,4 @@
     }
   ]
 }
+ 

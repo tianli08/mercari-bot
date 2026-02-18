@@ -1,8 +1,9 @@
-
+import asyncio
+import time
 import retrieveUtils
 from config import settings
 from database import insert_links
-from discord import send_webhook
+import discord_bot
 
 
 def main():
@@ -10,21 +11,22 @@ def main():
 
     all_urls = retrieveUtils.link_generator()
 
-    # db concept:
-    # if link not in db, return the new product, else continue.
-
-    for url in all_urls:  # Currently code only goes through all json keywords once.
-        curr_entry = retrieveUtils.mercari_link(url)
-        for link, desc in curr_entry.items():  # TODO: implement pydantic for db insertion
-            if insert_links(
-                {
-                    "_id": link,  # specific for mongodb hashing
-                    "item_name": desc[0],
-                    "image": desc[1],
-                }
-            ):
-                send_webhook(link, desc, settings.designer_webhook)
-                # TODO: need to implment a potential faster way of checking items already sent, 15 item limit refresh is slow.
+    new_items_only = 1
+    # Runs through this once for new_items_only = 1 to avoid any old items
+    if new_items_only:
+        for url in all_urls:
+            curr_entry = retrieveUtils.mercari_link(url)
+            for link, desc in curr_entry.items():
+                insert_links(
+                    {
+                        "_id": link,  # specific for mongodb hashing
+                        "item_name": desc[0],
+                        "image": desc[1],
+                    }
+                )
+        time.sleep(retrieveUtils.random_time())
+    asyncio.run(discord_bot.entry())
+    
 
 
 if __name__ == "__main__":
