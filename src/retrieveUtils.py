@@ -4,19 +4,24 @@ from urllib.parse import urlencode
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
 
 from config import app_config
 from constants import MERCARI_BASE_URL
 
 
 def mercari_link(link) -> dict:
-    # Returns dict <string, tuple> where string is link, and tuple has attributes (fullTitle, image, content)
-
+    '''
+     Returns dict <string, tuple> where string is link, and tuple has attributes (fullTitle, image, content)
+    '''
     all_items = {}
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--window-size=1920,1080")
 
-    driver = webdriver.Chrome()
+    driver = webdriver.Chrome(options=options)
     driver.get(link)
-    driver.implicitly_wait(5.5)
+    driver.implicitly_wait(7)
     # Items in mercari are sorted by <li data-testid="item-cell" class="">
     # Item ID located in <a-"data-location">
     # Item name and price in <div class="merItemThumbnail>
@@ -72,11 +77,11 @@ def random_time():  # Returns a random time from 60s to 120s to prevent bot dete
     return final_time
 
 
-def link_generator() -> list[str]:  # Moved to over here, generates all the links.
-    all_urls = []
+def link_generator() -> dict[str]:  # Moved to over here, generates all the links with brand name as keys.
+    all_urls = {}
     for filter_data in app_config.filters:
         for keyword in filter_data.keywords:
             params = {"keyword": keyword, "sort": "created_time", "order": "desc"}
             url = f"{MERCARI_BASE_URL}?{urlencode(params)}"
-            all_urls.append(url)
+            all_urls[url] = filter_data.name
     return all_urls

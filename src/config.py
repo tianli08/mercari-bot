@@ -33,7 +33,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_nested_delimiter="__", env_file=env_files, extra="allow")
 
     mongo_uri: SecretStr
+    discord_key: SecretStr
     designer_webhook: str
+    designer_channel_id: str
+    saved_channel_id: str
 
 
 settings = Settings()
