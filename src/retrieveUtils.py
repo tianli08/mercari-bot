@@ -1,7 +1,6 @@
 import random
 from collections import defaultdict
 from urllib.parse import urlencode
-
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
@@ -10,23 +9,17 @@ from config import app_config
 from constants import MERCARI_BASE_URL
 
 
-def mercari_link(link) -> dict:
+def mercari_link(driver, link) -> dict:
     '''
      Returns dict <string, tuple> where string is link, and tuple has attributes (fullTitle, image, content)
     '''
     all_items = {}
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--window-size=1920,1080")
-
-    driver = webdriver.Chrome(options=options)
     driver.get(link)
     driver.implicitly_wait(7)
     # Items in mercari are sorted by <li data-testid="item-cell" class="">
     # Item ID located in <a-"data-location">
     # Item name and price in <div class="merItemThumbnail>
     total_items = driver.find_elements(by=By.CSS_SELECTOR, value='[data-testid="item-cell"]')
-    # itemTest = driver.find_element(By.CSS_SELECTOR, '[data-testid="item-cell"]')
 
     print(f"Amount of items is {len(total_items)}")
 
@@ -45,15 +38,12 @@ def mercari_link(link) -> dict:
         full_title = full_title_scrape.get_attribute("aria-label")
 
         all_items[link] = (full_title, image, content)
-    # time.sleep(2)
 
     try:
         print(f"Page Title: {driver.title}")
         pass
     except :
         print("Driver crashed or closed.")
-
-    driver.quit()
 
     return all_items
 
@@ -85,3 +75,4 @@ def link_generator() -> dict[str]:  # Moved to over here, generates all the link
             url = f"{MERCARI_BASE_URL}?{urlencode(params)}"
             all_urls[url] = filter_data.name
     return all_urls
+
