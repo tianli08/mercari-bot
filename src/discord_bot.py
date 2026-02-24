@@ -1,8 +1,12 @@
 import discord
 from discord.ext import tasks, commands
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
 from config import settings
 import retrieveUtils
 from database import insert_links
+import asyncio
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -33,23 +37,30 @@ class MercariSendBot(commands.Cog):
         next_delay = retrieveUtils.random_time()
         self.send_product.change_interval(seconds=next_delay)
         channel = self.bot.get_channel(int(settings.designer_channel_id))
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--window-size=1920,1080")
+        
         if channel:
-            for url, brand in self.all_urls.items():  # Currently code only goes through all json keywords once.
-                curr_entry = retrieveUtils.mercari_link(url)
-                for link, desc in curr_entry.items():  # TODO: implement pydantic for db insertion
-                    if insert_links(
-                        {
-                            "_id": link,  # specific for mongodb hashing
-                            "item_name": desc[0],
-                            "image": desc[1],
-                        }
-                    ):
-                        embed = discord.Embed(title=desc[0], url=link, description=f"Brand is: {brand}")
-                        embed.set_image(url=desc[1])
-                        embed.set_footer(text="ArchiveStatic")
-                        view = View()
-                        await channel.send(embed=embed, view=view)
-                        break
+            driver = await asyncio.to_thread(webdriver.Chrome, options=options)
+            try:
+                for url, brand in self.all_urls.items():  # Currently code only goes through all json keywords once.
+                    curr_entry = await asyncio.to_thread(retrieveUtils.mercari_link, driver, url)
+                    for link, desc in curr_entry.items():  # TODO: implement pydantic for db insertion
+                        if await insert_links(
+                            {
+                                "_id": link,  # specific for mongodb hashing
+                                "item_name": desc[0],
+                                "image": desc[1],
+                            }
+                        ):
+                            embed = discord.Embed(title=desc[0], url=link, description=f"Brand is: {brand}")
+                            embed.set_image(url=desc[1])
+                            embed.set_footer(text="ArchiveStatic")
+                            view = View()
+                            await channel.send(embed=embed, view=view)
+            finally:
+                driver.quit()
         else:
             print("Fail")
 
