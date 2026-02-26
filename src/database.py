@@ -1,35 +1,39 @@
 import motor.motor_asyncio
-from pymongo import MongoClient
-from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 
 from config import settings
 
-# TODO: Need to change db hierarchy for other sites, just mainly a db naming thing.
+DATABASE_NAME = "mercari"
+LINKS_COLLECTION = "links"
 
-class GetDatabase:
-    _instance = None
 
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
+class DatabaseClient:
+    """Lazily initialized singleton wrapper for MongoDB access."""
+
+    _instance: "DatabaseClient | None" = None
+
+    def __new__(cls) -> "DatabaseClient":
+        if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
-    
-    def __init__(self):
-        if not hasattr(self, 'db'): 
-            connection_string = settings.mongo_uri.get_secret_value()
-            self.client = motor.motor_asyncio.AsyncIOMotorClient(connection_string)
-            self.db = self.client["mercari"]
 
-db_singleton = GetDatabase()
+    def __init__(self) -> None:
+        if hasattr(self, "db"):
+            return
+        connection_string = settings.mongo_uri.get_secret_value()
+        self.client = motor.motor_asyncio.AsyncIOMotorClient(connection_string)
+        self.db = self.client[DATABASE_NAME]
 
-async def insert_links(item) -> bool:
-    collection = db_singleton.db["links"]
+
+db_client = DatabaseClient()
+
+
+async def insert_links(item: dict) -> bool:
+    """Insert a listing document and return whether it was new."""
+    collection = db_client.db[LINKS_COLLECTION]
 
     try:
         await collection.insert_one(item)
-        # print("Success: Item added.")
         return True
     except DuplicateKeyError:
-        # print("Item in DB (Skipped)")
         return False

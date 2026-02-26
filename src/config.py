@@ -24,7 +24,7 @@ class AppConfig(BaseModel):
 
 
 class Settings(BaseSettings):
-    """Configuration settings for the program"""
+    """Environment-backed runtime settings."""
 
     env_files: ClassVar[list[str]] = glob.glob("/etc/config/*.env") + [
         ".env",

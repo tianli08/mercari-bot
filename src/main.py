@@ -1,16 +1,30 @@
 import asyncio
 import discord_bot
 
-def main():
-    # TODO: Implement first pass as a user selection to send notifs or not.
-    input("Press enter to start.")
-    # Main Logic Loop
-    asyncio.run(discord_bot.entry())
-    
+START_PROMPT = "Press Enter to start the bot..."
+INITIAL_SEND_PROMPT = (
+    "Send initial discovered items to Discord during startup? [y/N]: "
+)
+
+
+def run_bot(send_initial_items: bool) -> None:
+    """Start the Discord bot event loop."""
+    asyncio.run(discord_bot.entry(send_initial_items=send_initial_items))
+
+
+def ask_send_initial_items() -> bool:
+    """Ask whether startup-discovered items should be posted to Discord."""
+    response = input(INITIAL_SEND_PROMPT).strip().lower()
+    return response in {"y", "yes"}
+
+
+def main() -> None:
+    """CLI entrypoint for the Mercari bot."""
+    # Keep a manual start gate so users can confirm terminal readiness.
+    input(START_PROMPT)
+    send_initial_items = ask_send_initial_items()
+    run_bot(send_initial_items=send_initial_items)
+
+
 if __name__ == "__main__":
     main()
-
-    # Selections should be made with a particular format
-    # "https://jp.mercari.com/search?keyword=saint%20laurent%20jacket&sort=created_time&order=desc"
-    # KW: Should be in JP if branded there unless artisanal
-    # Sold out products should not be toggled out due to page refresh adding another product from following page.
