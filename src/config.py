@@ -24,7 +24,7 @@ class AppConfig(BaseModel):
 
 
 class Settings(BaseSettings):
-    """Configuration settings for the program"""
+    """Environment-backed runtime settings."""
 
     env_files: ClassVar[list[str]] = glob.glob("/etc/config/*.env") + [
         ".env",
@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     designer_webhook: str
     designer_channel_id: str
     saved_channel_id: str
+    mercari_db_name: str
+    mercari_collection_name: str
 
 
 settings = Settings()
