@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     designer_webhook: str
     designer_channel_id: str
     saved_channel_id: str
+    mercari_db_name: str
+    mercari_collection_name: str
 
 
 settings = Settings()
