@@ -1,5 +1,4 @@
 import motor.motor_asyncio
-from pymongo.errors import DuplicateKeyError
 
 from config import settings
 
@@ -27,9 +26,9 @@ db_client = DatabaseClient()
 async def insert_links(item: dict) -> bool:
     """Insert a listing document and return whether it was new."""
     collection = db_client.db[settings.mercari_collection_name]
-
-    try:
-        await collection.insert_one(item)
-        return True
-    except DuplicateKeyError:
-        return False
+    result = await collection.update_one(
+        {"_id": item["_id"]},
+        {"$setOnInsert": item},
+        upsert=True,
+    )
+    return result.upserted_id is not None

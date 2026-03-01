@@ -37,6 +37,7 @@ class MercariSendBot(commands.Cog):
         self.bot = discord_bot
         self.send_initial_items = send_initial_items
         self.is_initial_scan = True
+        self.driver: webdriver.Chrome | None = None
         self.all_urls = retrieve_utils.link_generator()
         self.send_product.start()
 
@@ -52,14 +53,26 @@ class MercariSendBot(commands.Cog):
         options = MercariSendBot.build_webdriver_options()
         return await asyncio.to_thread(webdriver.Chrome, options=options)
 
+    async def get_or_create_driver(self) -> webdriver.Chrome:
+        """Create a single persistent driver and reuse it across cycles."""
+        if self.driver is None:
+            self.driver = await self.create_driver()
+        return self.driver
+
     @staticmethod
     async def send_listing_message(
         channel: discord.abc.Messageable, link: str, brand: str, item: dict
     ) -> None:
+        """Embed logic"""
+        proxy_link = retrieve_utils.link_crafter(link)
+        description = f"Brand is: {brand}"
+        if proxy_link:
+            description = f"{description}\nProxy: [Open listing]({proxy_link})"
+
         embed = discord.Embed(
             title=item["item_name"],
             url=link,
-            description=f"Brand is: {brand}",
+            description=description,
         )
         embed.set_image(url=item["image"])
         embed.set_footer(text="ArchiveStatic")
@@ -74,25 +87,22 @@ class MercariSendBot(commands.Cog):
             print("Designer channel not found. Check designer_channel_id.")
             return
 
-        driver = await self.create_driver()
-        try:
-            for url, brand in self.all_urls.items():
-                current_entries = await asyncio.to_thread(retrieve_utils.mercari_link, driver, url)
-                for link, item in current_entries.items():
-                    is_new_listing = await insert_links(
-                        {
-                            "_id": link,
-                            "item_name": item["item_name"],
-                            "image": item["image"],
-                        }
-                    )
-                    if is_new_listing:
-                        should_send_message = self.send_initial_items or not self.is_initial_scan
-                        if should_send_message:
-                            await self.send_listing_message(channel, link, brand, item)
-        finally:
-            driver.quit()
-            self.is_initial_scan = False
+        driver = await self.get_or_create_driver()
+        for url, brand in self.all_urls.items():
+            current_entries = await asyncio.to_thread(retrieve_utils.mercari_link, driver, url)
+            for link, item in current_entries.items():
+                is_new_listing = await insert_links(
+                    {
+                        "_id": link,
+                        "item_name": item["item_name"],
+                        "image": item["image"],
+                    }
+                )
+                if is_new_listing:
+                    should_send_message = self.send_initial_items or not self.is_initial_scan
+                    if should_send_message:
+                        await self.send_listing_message(channel, link, brand, item)
+        self.is_initial_scan = False
 
     @send_product.before_loop
     async def wait_until_reg(self) -> None:
