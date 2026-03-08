@@ -64,18 +64,47 @@ async def upsert_listing(listing: ListingRecord, observed_at: datetime | None = 
     timestamp = observed_at or datetime.now(UTC)
     listing_document = listing.to_document(observed_at=timestamp)
     listing_id = listing_document["_id"]
-    mutable_document = {key: value for key, value in listing_document.items() if key != "_id"}
+    mutable_document = {
+        "listing_id": listing_document["listing_id"],
+        "marketplace": listing_document["marketplace"],
+        "item_id": listing_document["item_id"],
+        "canonical_url": listing_document["canonical_url"],
+        "url": listing_document["url"],
+        "title": listing_document["title"],
+        "item_name": listing_document["item_name"],
+        "raw_content": listing_document["raw_content"],
+        "status": listing_document["status"],
+        "last_seen_at": listing_document["last_seen_at"],
+        "updated_at": listing_document["updated_at"],
+    }
+    if listing_document["thumbnail_url"] is not None:
+        mutable_document["thumbnail_url"] = listing_document["thumbnail_url"]
+        mutable_document["image"] = listing_document["image"]
+    if listing_document["price"] is not None:
+        mutable_document["price"] = listing_document["price"]
+
+    add_to_set_document: dict[str, object] = {}
+    if listing_document["matched_filters"]:
+        add_to_set_document["matched_filters"] = {"$each": listing_document["matched_filters"]}
+    if listing_document["matched_keywords"]:
+        add_to_set_document["matched_keywords"] = {"$each": listing_document["matched_keywords"]}
+    if listing_document["search_contexts"]:
+        add_to_set_document["search_contexts"] = {"$each": listing_document["search_contexts"]}
+
+    update_document: dict[str, object] = {
+        "$setOnInsert": {
+            "_id": listing_id,
+            "first_seen_at": timestamp,
+            "created_at": timestamp,
+        },
+        "$set": mutable_document,
+    }
+    if add_to_set_document:
+        update_document["$addToSet"] = add_to_set_document
 
     result = await db_client.listings.update_one(
         {"_id": listing_id},
-        {
-            "$setOnInsert": {
-                "_id": listing_id,
-                "first_seen_at": timestamp,
-                "created_at": timestamp,
-            },
-            "$set": mutable_document,
-        },
+        update_document,
         upsert=True,
     )
     return result.upserted_id is not None

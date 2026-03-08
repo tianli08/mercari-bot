@@ -71,12 +71,25 @@ def mercari_link(driver, search: SearchDefinition) -> list[ListingRecord]:
     return all_items
 
 
-def random_time() -> float:
-    """Return random delay (>=60s) to reduce scraping predictability."""
-    sleep_seconds = random.gauss(90, 15)
-    final_time = max(60, sleep_seconds)
-    print(f"Next iteration sleeping for {final_time} seconds")
-    return final_time
+def random_cycle_time() -> float:
+    """Return a randomized target duration for a full rotation of searches."""
+    cycle_seconds = random.gauss(90, 15)
+    return max(60, cycle_seconds)
+
+
+def query_interval(search_count: int) -> float:
+    """Return the delay between individual searches in a round-robin loop."""
+    if search_count <= 0:
+        return 60.0
+
+    cycle_seconds = random_cycle_time()
+    interval_seconds = max(1.0, cycle_seconds / search_count)
+    print(
+        "Next rotation spacing set to "
+        f"{interval_seconds:.2f}s between queries "
+        f"(full scan target: {cycle_seconds:.2f}s)"
+    )
+    return interval_seconds
 
 
 def link_generator() -> list[SearchDefinition]:
