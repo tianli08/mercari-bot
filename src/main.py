@@ -1,5 +1,8 @@
+"""CLI entrypoint for the Discord marketplace monitor bot."""
+
 import asyncio
-import discord_bot
+
+from . import discord_bot
 
 START_PROMPT = "Press Enter to start the bot..."
 INITIAL_SEND_PROMPT = (
