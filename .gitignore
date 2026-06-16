@@ -7,6 +7,7 @@ wheels/
 *.egg-info
 tmp.json
 .env
+channel_id.env
 
 # Virtual environments
 .venv

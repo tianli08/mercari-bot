@@ -13,6 +13,8 @@ class FilterConfig(BaseModel):
 
     name: str
     keywords: list[str] = Field(default_factory=list)
+    channel_id: str | None = None
+    channel_id_env: str | None = None
 
 
 class AppConfig(BaseModel):
@@ -36,6 +38,7 @@ class Settings(BaseSettings):
     env_files: ClassVar[list[str]] = glob.glob("/etc/config/*.env") + [
         ".env",
         ".env.local",
+        "channel_id.env",
     ]
     model_config = SettingsConfigDict(env_nested_delimiter="__", env_file=env_files, extra="allow")
 
@@ -44,6 +47,32 @@ class Settings(BaseSettings):
     designer_webhook: str
     designer_channel_id: str
     saved_channel_id: str
+    mihara_channel_id: str | None = None
+    carol_christian_poell_channel_id: str | None = None
+    jean_paul_gaultier_channel_id: str | None = None
+    the_soloist_channel_id: str | None = None
+    fourteenth_addiction_channel_id: str | None = None
+    rick_owens_channel_id: str | None = None
+    ann_demeulemeester_channel_id: str | None = None
+    attachment_channel_id: str | None = None
+    boris_bidjan_saberi_channel_id: str | None = None
+    dior_homme_channel_id: str | None = None
+    isamu_katayama_backlash_channel_id: str | None = None
+    julius_7_channel_id: str | None = None
+    kapital_channel_id: str | None = None
+    lad_musician_channel_id: str | None = None
+    maison_margiela_channel_id: str | None = None
+    number_nine_channel_id: str | None = None
+    saint_laurent_paris_channel_id: str | None = None
+    tornado_mart_channel_id: str | None = None
+    undercover_channel_id: str | None = None
+    a_and_g_rock_n_roll_couture_channel_id: str | None = None
+    raf_simons_channel_id: str | None = None
+    query_interval_min_seconds: float = 10.0
+    query_interval_max_seconds: float = 20.0
+    selenium_page_load_timeout_seconds: float = 25.0
+    selenium_script_timeout_seconds: float = 20.0
+    driver_restart_after_searches: int = 150
     marketplace_db_name: str | None = None
     listings_collection_name: str | None = None
     alerts_collection_name: str | None = None

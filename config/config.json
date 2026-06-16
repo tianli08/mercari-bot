@@ -1,21 +1,104 @@
 {
   "filters": [
-    { 
-      "name": "Mihara Yasuhiro", 
-      "keywords": ["ミハラヤスヒロ"] 
+    {
+      "name": "Mihara Yasuhiro",
+      "channel_id_env": "MIHARA_CHANNEL_ID",
+      "keywords": ["mihara yasuhiro", "ミハラヤスヒロ"]
     },
     {
       "name": "Carol Christian Poell",
-      "keywords": ["carol christian poell"]
+      "channel_id_env": "CAROL_CHRISTIAN_POELL_CHANNEL_ID",
+      "keywords": ["carol christian poell", "キャロルクリスチャンポエル"]
     },
     {
       "name": "TheSoloist",
-      "keywords": ["thesoloist"]
+      "channel_id_env": "THE_SOLOIST_CHANNEL_ID",
+      "keywords": ["thesoloist", "タカヒロミヤシタザソロイスト"]
     },
     {
-      "name": "Jean Paul Gaultier",
-      "keywords": ["ジャンポールゴルティエ"]
+      "name": "14th Addiction",
+      "channel_id_env": "FOURTEENTH_ADDICTION_CHANNEL_ID",
+      "keywords": ["14th addiction", "フォーティーンスアディクション"]
+    },
+    {
+      "name": "Rick Owens",
+      "channel_id_env": "RICK_OWENS_CHANNEL_ID",
+      "keywords": ["rick owens", "リックオウエンス"]
+    },
+    {
+      "name": "Ann Demeulemeester",
+      "channel_id_env": "ANN_DEMEULEMEESTER_CHANNEL_ID",
+      "keywords": ["ann demeulemeester", "アン ドゥムルメステール"]
+    },
+    {
+      "name": "Attachment",
+      "channel_id_env": "ATTACHMENT_CHANNEL_ID",
+      "keywords": ["attachment kazuyuki kumagai", "kazuyuki kumagai"]
+    },
+    {
+      "name": "Boris Bidjan Saberi",
+      "channel_id_env": "BORIS_BIDJAN_SABERI_CHANNEL_ID",
+      "keywords": ["boris bidjan saberi", "ボリスビジャンサベリ"]
+    },
+    {
+      "name": "Dior Homme",
+      "channel_id_env": "DIOR_HOMME_CHANNEL_ID",
+      "keywords": ["dior homme", "ディオールオム"]
+    },
+    {
+      "name": "Isamu Katayama Backlash",
+      "channel_id_env": "ISAMU_KATAYAMA_BACKLASH_CHANNEL_ID",
+      "keywords": ["isamu katayama backlash", "イサムカタヤマバックラッシュ"]
+    },
+    {
+      "name": "Julius_7",
+      "channel_id_env": "JULIUS_7_CHANNEL_ID",
+      "keywords": ["julius", "julius_7", "ユリウス"]
+    },
+    {
+      "name": "Kapital",
+      "channel_id_env": "KAPITAL_CHANNEL_ID",
+      "keywords": ["kapital", "キャピタル"]
+    },
+    {
+      "name": "Lad Musician",
+      "channel_id_env": "LAD_MUSICIAN_CHANNEL_ID",
+      "keywords": ["lad musician", "ラッドミュージシャン"]
+    },
+    {
+      "name": "Maison Margiela",
+      "channel_id_env": "MAISON_MARGIELA_CHANNEL_ID",
+      "keywords": ["maison margiela", "メゾンマルジェラ"]
+    },
+    {
+      "name": "Number (N)ine",
+      "channel_id_env": "NUMBER_NINE_CHANNEL_ID",
+      "keywords": ["number (n)ine", "ナンバーナイン"]
+    },
+    {
+      "name": "Saint Laurent Paris",
+      "channel_id_env": "SAINT_LAURENT_PARIS_CHANNEL_ID",
+      "keywords": ["saint laurent paris", "サンローランパリ"]
+    },
+    {
+      "name": "Tornado Mart",
+      "channel_id_env": "TORNADO_MART_CHANNEL_ID",
+      "keywords": ["tornado mart", "トルネードマート"]
+    },
+    {
+      "name": "Undercover",
+      "channel_id_env": "UNDERCOVER_CHANNEL_ID",
+      "keywords": ["undercover", "アンダーカバー"]
+    },
+    {
+      "name": "A&G Rock n Roll Couture",
+      "channel_id_env": "A_AND_G_ROCK_N_ROLL_COUTURE_CHANNEL_ID",
+      "keywords": ["a&g rock n roll couture", "エーアンドジー"]
+    },
+    {
+      "name": "Raf Simons",
+      "channel_id_env": "RAF_SIMONS_CHANNEL_ID",
+      "keywords": ["raf simons", "ラフシモンズ"]
     }
   ]
 }
- 
