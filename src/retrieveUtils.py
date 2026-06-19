@@ -1,7 +1,6 @@
 """Scraping helpers for marketplace search pages."""
 
 import random
-import traceback
 from urllib.parse import urlencode
 
 from selenium.common.exceptions import TimeoutException, WebDriverException
@@ -11,13 +10,25 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from .config import app_config, settings
 from .constants import BUYEE_LINK, MERCARI_BASE_URL
-from .listings import ListingRecord, SearchContext, SearchDefinition, extract_marketplace_item_id
+from .listings import (
+    ListingRecord,
+    SearchContext,
+    SearchDefinition,
+    extract_marketplace_item_id,
+)
+from .logging_utils import get_logger
+
+scraper_logger = get_logger("scraper")
 
 
-def print_error(message: str, exc: BaseException) -> None:
-    """Print exception details for long-running terminal monitoring."""
-    print(f"{message}: {type(exc).__name__}: {exc}")
-    traceback.print_exception(type(exc), exc, exc.__traceback__)
+def _search_context(search: SearchDefinition) -> dict[str, str]:
+    """Return common log context for a search definition."""
+    return {
+        "marketplace": search.marketplace,
+        "filter": search.filter_name,
+        "keyword": search.keyword,
+        "url": search.url,
+    }
 
 
 def mercari_link(driver, search: SearchDefinition) -> list[ListingRecord]:
@@ -26,13 +37,22 @@ def mercari_link(driver, search: SearchDefinition) -> list[ListingRecord]:
     try:
         driver.get(search.url)
     except TimeoutException as exc:
-        print_error(f"Mercari page load timed out: {search.url}", exc)
+        scraper_logger.warning(
+            "Mercari page load timed out; attempting to stop the page load",
+            context={**_search_context(search), "exception": type(exc).__name__},
+        )
         try:
             driver.execute_script("window.stop();")
         except WebDriverException as stop_exc:
-            print_error(f"Failed to stop timed-out Mercari page load: {search.url}", stop_exc)
+            scraper_logger.warning(
+                "Failed to stop timed-out Mercari page load",
+                context={**_search_context(search), "exception": type(stop_exc).__name__},
+            )
     except WebDriverException as exc:
-        print_error(f"Mercari page load failed: {search.url}", exc)
+        scraper_logger.warning(
+            "Mercari page load failed; search will return no listings",
+            context={**_search_context(search), "exception": type(exc).__name__},
+        )
         return all_items
 
     try:
@@ -40,12 +60,15 @@ def mercari_link(driver, search: SearchDefinition) -> list[ListingRecord]:
             EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="item-cell"]'))
         )
     except TimeoutException as exc:
-        print_error(f"No item cells found before timeout: {search.url}", exc)
+        scraper_logger.warning(
+            "No item cells found before timeout; search will return no listings",
+            context={**_search_context(search), "exception": type(exc).__name__},
+        )
         return all_items
 
     total_items = driver.find_elements(by=By.CSS_SELECTOR, value='[data-testid="item-cell"]')
 
-    print(f"Amount of items is {len(total_items)}")
+    scraper_logger.debug("Scraped item cells", context={**_search_context(search), "items": len(total_items)})
 
     for item in total_items:
         try:
@@ -79,14 +102,23 @@ def mercari_link(driver, search: SearchDefinition) -> list[ListingRecord]:
                 )
             )
         except ValueError as exc:
-            print_error(f"Skipping invalid scraped listing on {search.url}", exc)
+            scraper_logger.warning(
+                "Skipping invalid scraped listing",
+                context={**_search_context(search), "exception": type(exc).__name__},
+            )
         except WebDriverException as exc:
-            print_error(f"Skipping listing after Selenium extraction error on {search.url}", exc)
+            scraper_logger.warning(
+                "Skipping listing after Selenium extraction error",
+                context={**_search_context(search), "exception": type(exc).__name__},
+            )
 
     try:
-        print(f"Page Title: {driver.title}")
+        scraper_logger.debug("Scraped page title", context={**_search_context(search), "title": driver.title})
     except Exception as exc:
-        print_error("Driver crashed or closed while reading page title", exc)
+        scraper_logger.warning(
+            "Could not read scraped page title",
+            context={**_search_context(search), "exception": type(exc).__name__},
+        )
 
     return all_items
 
@@ -99,10 +131,13 @@ def query_interval(search_count: int) -> float:
     min_seconds = max(1.0, settings.query_interval_min_seconds)
     max_seconds = max(min_seconds, settings.query_interval_max_seconds)
     interval_seconds = random.uniform(min_seconds, max_seconds)
-    print(
-        "Next query spacing set to "
-        f"{interval_seconds:.2f}s "
-        f"(full rotation estimate: {interval_seconds * search_count:.2f}s)"
+    scraper_logger.debug(
+        "Calculated legacy query interval",
+        context={
+            "interval_seconds": f"{interval_seconds:.2f}",
+            "rotation_estimate_seconds": f"{interval_seconds * search_count:.2f}",
+            "searches": search_count,
+        },
     )
     return interval_seconds
 

@@ -2,11 +2,13 @@
 
 import asyncio
 import os
-import traceback
+import random
+import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
@@ -19,11 +21,16 @@ from .database import (
     reserve_alert_delivery,
     upsert_listing,
 )
-from .listings import ListingRecord
+from .listings import ListingRecord, SearchDefinition
+from .logging_utils import configure_logging, get_logger, log_exception
+from .rate_limiter import AsyncRateLimiter
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+scraper_logger = get_logger("scraper")
+dispatcher_logger = get_logger("dispatcher")
+discord_logger = get_logger("discord")
 
 
 def configured_filter_channels() -> dict[str, str]:
@@ -50,10 +57,19 @@ def configured_filter_channels() -> dict[str, str]:
 FILTER_CHANNEL_IDS = configured_filter_channels()
 
 
-def print_error(message: str, exc: BaseException) -> None:
-    """Print exception details for long-running terminal monitoring."""
-    print(f"{message}: {type(exc).__name__}: {exc}")
-    traceback.print_exception(type(exc), exc, exc.__traceback__)
+def worker_logger(worker_id: int):
+    """Return a logger bound to a worker component tag."""
+    return get_logger(f"worker {worker_id}")
+
+
+@dataclass(slots=True)
+class ScrapeWorker:
+    """Per-worker Selenium session state."""
+
+    worker_id: int
+    driver: webdriver.Chrome | None = None
+    browser_profile: BrowserProfile | None = None
+    search_count: int = 0
 
 
 class View(discord.ui.View):
@@ -89,6 +105,10 @@ class View(discord.ui.View):
 
             channel = interaction.client.get_channel(int(settings.saved_channel_id))
             if channel is None:
+                discord_logger.warning(
+                    "Saved-items channel is not available",
+                    context={"channel_id": settings.saved_channel_id},
+                )
                 await interaction.followup.send("Saved-items channel not found.", ephemeral=True)
                 return
 
@@ -96,7 +116,12 @@ class View(discord.ui.View):
             try:
                 await channel.send(embed=embed)
             except discord.DiscordException as exc:
-                print_error("Failed to save listing embed to saved-items channel", exc)
+                log_exception(
+                    discord_logger,
+                    "Failed to send listing embed to saved-items channel",
+                    exc,
+                    channel_id=settings.saved_channel_id,
+                )
                 await interaction.followup.send("Saving failed. Try again.", ephemeral=True)
                 return
 
@@ -111,17 +136,17 @@ class MercariSendBot(commands.Cog):
     """Continuously scrape Mercari and post newly discovered products."""
 
     def __init__(self, discord_bot: commands.Bot, send_initial_items: bool = True) -> None:
-        """Initialize the scraping worker and start the polling loop."""
+        """Initialize shared scraper state."""
         self.bot = discord_bot
         self.send_initial_items = send_initial_items
         self.is_initial_scan = True
-        self.driver: webdriver.Chrome | None = None
-        self.browser_profile: BrowserProfile | None = None
-        self.driver_search_count = 0
         self.searches = retrieve_utils.link_generator()
-        self.next_search_index = 0
-        self.query_interval_seconds = retrieve_utils.query_interval(len(self.searches))
-        self.send_product.start()
+        self.search_queue: asyncio.Queue[SearchDefinition] = asyncio.Queue()
+        self.rate_limiter = AsyncRateLimiter(settings.max_requests_per_minute)
+        self.workers: list[ScrapeWorker] = []
+        self._launcher_task: asyncio.Task[None] | None = None
+        self._dispatcher_task: asyncio.Task[None] | None = None
+        self._worker_tasks: list[asyncio.Task[None]] = []
 
     @staticmethod
     def build_webdriver_options(profile: BrowserProfile) -> Options:
@@ -181,45 +206,58 @@ class MercariSendBot(commands.Cog):
         try:
             await asyncio.to_thread(MercariSendBot.apply_browser_profile, driver, profile)
         except Exception as exc:
-            print_error("Failed to apply browser profile overrides", exc)
-        print(
-            "Started Chrome session with "
-            f"{profile.platform}, {profile.width}x{profile.height}, {profile.timezone}"
-        )
+            log_exception(
+                scraper_logger,
+                "Failed to apply browser profile overrides",
+                exc,
+                platform=profile.platform,
+                timezone=profile.timezone,
+            )
         return driver, profile
 
-    async def get_or_create_driver(self) -> webdriver.Chrome:
-        """Create a single persistent driver and reuse it across cycles."""
-        if self.driver is None:
-            self.driver, self.browser_profile = await self.create_driver()
-            self.driver_search_count = 0
-        return self.driver
+    async def _ensure_worker_driver(self, worker: ScrapeWorker) -> webdriver.Chrome:
+        """Create this worker's private webdriver if it does not already have one."""
+        if worker.driver is None:
+            logger = worker_logger(worker.worker_id)
+            logger.info("Starting Chrome session")
+            worker.driver, worker.browser_profile = await self.create_driver()
+            worker.search_count = 0
+            profile = worker.browser_profile
+            logger.info(
+                "Chrome session ready",
+                context={
+                    "platform": profile.platform,
+                    "window": f"{profile.width}x{profile.height}",
+                    "timezone": profile.timezone,
+                },
+            )
+        return worker.driver
 
-    async def restart_driver(self) -> None:
-        """Restart the Selenium driver after failures or long-running sessions."""
-        if self.driver is not None:
-            try:
-                await asyncio.to_thread(self.driver.quit)
-            except Exception as exc:
-                print_error("Failed to quit Chrome session cleanly", exc)
-        self.driver = None
-        self.browser_profile = None
-        self.driver_search_count = 0
+    async def _quit_worker_driver(self, worker: ScrapeWorker) -> None:
+        """Quit this worker's private webdriver, if present."""
+        if worker.driver is None:
+            return
 
-    def advance_search(self) -> None:
-        """Move to the next configured search and refresh the next delay."""
-        self.next_search_index = (self.next_search_index + 1) % len(self.searches)
-        if self.next_search_index == 0:
-            self.is_initial_scan = False
-        self.query_interval_seconds = retrieve_utils.query_interval(len(self.searches))
-        self.send_product.change_interval(seconds=self.query_interval_seconds)
+        driver = worker.driver
+        worker.driver = None
+        worker.browser_profile = None
+        worker.search_count = 0
+        logger = worker_logger(worker.worker_id)
+        logger.info("Quitting Chrome session")
+        try:
+            await asyncio.to_thread(driver.quit)
+        except Exception as exc:
+            log_exception(logger, "Failed to quit Chrome session cleanly", exc)
+
+    async def _restart_worker_driver(self, worker: ScrapeWorker, reason: str | None = None) -> None:
+        """Restart this worker's webdriver after a failure or search-count limit."""
+        worker_logger(worker.worker_id).info("Restarting Chrome session", context={"reason": reason})
+        await self._quit_worker_driver(worker)
 
     def get_channel_for_filter(self, filter_name: str) -> discord.abc.Messageable | None:
         """Return the configured alert channel for a filter, falling back to the designer channel."""
         channel_id = FILTER_CHANNEL_IDS.get(filter_name) or settings.designer_channel_id
         channel = self.bot.get_channel(int(channel_id))
-        if channel is None:
-            print(f"Alert channel not found for {filter_name}. Check channel id {channel_id}.")
         return channel
 
     @staticmethod
@@ -250,45 +288,199 @@ class MercariSendBot(commands.Cog):
         embed.set_footer(text=f"ArchiveStatic | {item.canonical_id}")
         await channel.send(embed=embed, view=View())
 
-    @tasks.loop(seconds=1)
-    async def send_product(self) -> None:
-        """Poll all searches, persist canonical listings, and send new alerts."""
-        if not self.searches:
-            print("No searches configured. Sleeping for 60 seconds.")
-            self.send_product.change_interval(seconds=60)
-            return
+    async def cog_load(self) -> None:
+        """Start the scraper pool after the cog is loaded."""
+        self._launcher_task = asyncio.create_task(
+            self._launch_scraper_pool(),
+            name="mercari-scraper-launcher",
+        )
 
+    async def cog_unload(self) -> None:
+        """Cancel scraper tasks and close all worker browsers."""
+        tasks_to_cancel = [
+            task
+            for task in [self._launcher_task, self._dispatcher_task, *self._worker_tasks]
+            if task is not None and not task.done()
+        ]
+        for task in tasks_to_cancel:
+            task.cancel()
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+        if self.workers:
+            await asyncio.gather(
+                *(self._quit_worker_driver(worker) for worker in self.workers),
+                return_exceptions=True,
+            )
+
+        self._launcher_task = None
+        self._dispatcher_task = None
+        self._worker_tasks.clear()
+        self.workers.clear()
+
+    async def _launch_scraper_pool(self) -> None:
+        """Wait for Discord readiness, then launch the fixed scraper pool."""
+        try:
+            await self.bot.wait_until_ready()
+            worker_count = min(max(1, settings.worker_pool_size), 6)
+            if worker_count != settings.worker_pool_size:
+                scraper_logger.warning(
+                    "Adjusted worker pool size to supported range",
+                    context={"configured": settings.worker_pool_size, "effective": worker_count},
+                )
+
+            scraper_logger.info(
+                "Starting Mercari scraper pool",
+                context={
+                    "workers": worker_count,
+                    "searches": len(self.searches),
+                    "max_requests_per_minute": f"{settings.max_requests_per_minute:.2f}",
+                },
+            )
+            self.workers = [ScrapeWorker(worker_id=worker_id) for worker_id in range(1, worker_count + 1)]
+
+            startup_stagger = max(0.0, settings.worker_startup_stagger_seconds)
+            for worker in self.workers:
+                task = asyncio.create_task(
+                    self._run_worker(worker),
+                    name=f"mercari-scrape-worker-{worker.worker_id}",
+                )
+                self._worker_tasks.append(task)
+                worker_logger(worker.worker_id).info("Worker task launched")
+                if self.searches:
+                    try:
+                        await self._ensure_worker_driver(worker)
+                    except Exception as exc:
+                        log_exception(
+                            worker_logger(worker.worker_id),
+                            "Failed to prewarm Chrome session",
+                            exc,
+                        )
+                        await self._restart_worker_driver(worker, reason="startup failure")
+                if worker.worker_id < worker_count and startup_stagger > 0:
+                    await asyncio.sleep(startup_stagger)
+
+            self._dispatcher_task = asyncio.create_task(
+                self._run_dispatcher(),
+                name="mercari-scrape-dispatcher",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log_exception(scraper_logger, "Scraper pool launcher failed", exc)
+
+    async def _run_dispatcher(self) -> None:
+        """Refill the shared queue once per full scraping cycle."""
+        cycle_number = 0
+        try:
+            while True:
+                if not self.searches:
+                    dispatcher_logger.warning("No searches configured; dispatcher is sleeping", context={"sleep": 60})
+                    await asyncio.sleep(60)
+                    continue
+
+                cycle_number += 1
+                cycle_started_at = time.monotonic()
+                cycle_searches = list(self.searches)
+                random.shuffle(cycle_searches)
+
+                for search in cycle_searches:
+                    await self.search_queue.put(search)
+
+                dispatcher_logger.info(
+                    "Scrape cycle queued",
+                    context={
+                        "cycle": cycle_number,
+                        "searches": len(cycle_searches),
+                        "queue_depth": self.search_queue.qsize(),
+                    },
+                )
+                await self.search_queue.join()
+
+                cycle_seconds = time.monotonic() - cycle_started_at
+                if self.is_initial_scan:
+                    self.is_initial_scan = False
+                    dispatcher_logger.info("Initial scan complete; future new listings will be alerted")
+
+                dispatcher_logger.info(
+                    "Scrape cycle completed",
+                    context={
+                        "cycle": cycle_number,
+                        "elapsed_seconds": f"{cycle_seconds:.2f}",
+                        "pause_seconds": f"{settings.cycle_pause_seconds:.2f}",
+                    },
+                )
+                await asyncio.sleep(max(0.0, settings.cycle_pause_seconds))
+        except asyncio.CancelledError:
+            dispatcher_logger.info("Dispatcher stopped")
+            raise
+
+    async def _run_worker(self, worker: ScrapeWorker) -> None:
+        """Consume searches from the shared queue until cancelled."""
+        logger = worker_logger(worker.worker_id)
+        logger.info("Worker started")
+        try:
+            while True:
+                search = await self.search_queue.get()
+                try:
+                    await self._process_search(worker, search)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log_exception(
+                        logger,
+                        "Search failed; worker will restart its Chrome session",
+                        exc,
+                        filter=search.filter_name,
+                        keyword=search.keyword,
+                        url=search.url,
+                    )
+                    await self._restart_worker_driver(worker, reason="search failure")
+                finally:
+                    self.search_queue.task_done()
+        except asyncio.CancelledError:
+            logger.info("Worker stopping")
+            raise
+        finally:
+            await self._quit_worker_driver(worker)
+            logger.info("Worker stopped")
+
+    async def _process_search(self, worker: ScrapeWorker, search: SearchDefinition) -> None:
+        """Scrape one search and process newly discovered listings."""
+        logger = worker_logger(worker.worker_id)
         observed_at = datetime.now(UTC)
-        search = self.searches[self.next_search_index]
         channel = self.get_channel_for_filter(search.filter_name)
         if channel is None:
-            self.advance_search()
+            channel_id = FILTER_CHANNEL_IDS.get(search.filter_name) or settings.designer_channel_id
+            logger.warning(
+                "Skipping search because alert channel is not available",
+                context={"filter": search.filter_name, "keyword": search.keyword, "channel_id": channel_id},
+            )
             return
 
-        try:
-            driver = await self.get_or_create_driver()
-        except Exception as exc:
-            print_error(f"Failed to start Chrome for {search.filter_name} [{search.keyword}]", exc)
-            await self.restart_driver()
-            self.advance_search()
-            return
-
-        print(
-            "Checking search "
-            f"{self.next_search_index + 1}/{len(self.searches)}: "
-            f"{search.filter_name} [{search.keyword}]"
+        driver = await self._ensure_worker_driver(worker)
+        search_started_at = time.monotonic()
+        logger.info(
+            "Search started",
+            context={
+                "filter": search.filter_name,
+                "keyword": search.keyword,
+                "queue_depth": self.search_queue.qsize(),
+            },
         )
-        try:
-            current_entries = await asyncio.to_thread(retrieve_utils.mercari_link, driver, search)
-        except Exception as exc:
-            print_error(f"Search failed for {search.filter_name} [{search.keyword}]", exc)
-            await self.restart_driver()
-            current_entries = []
-        else:
-            self.driver_search_count += 1
-            if self.driver_search_count >= settings.driver_restart_after_searches:
-                print(f"Restarting Chrome after {self.driver_search_count} searches.")
-                await self.restart_driver()
+        await self.rate_limiter.acquire()
+        logger.debug(
+            "Requesting search page",
+            context={"filter": search.filter_name, "keyword": search.keyword, "url": search.url},
+        )
+        current_entries = await asyncio.to_thread(retrieve_utils.mercari_link, driver, search)
+        worker.search_count += 1
+        if worker.search_count >= settings.driver_restart_after_searches:
+            await self._restart_worker_driver(
+                worker,
+                reason=f"{worker.search_count} searches",
+            )
+
         aggregated_listings: dict[str, ListingRecord] = {}
         retrieve_utils.merge_listing_results(aggregated_listings, current_entries)
 
@@ -324,24 +516,37 @@ class MercariSendBot(commands.Cog):
                     try:
                         await discard_pending_alert_delivery(delivery_id)
                     except Exception as discard_exc:
-                        print_error(f"Failed to discard pending alert {delivery_id}", discard_exc)
-                print_error(f"Skipping listing {listing.canonical_id} after error", exc)
+                        log_exception(
+                            logger,
+                            "Failed to discard pending alert reservation",
+                            discard_exc,
+                            delivery_id=delivery_id,
+                            listing_id=listing.canonical_id,
+                        )
+                log_exception(
+                    logger,
+                    "Skipping listing after processing error",
+                    exc,
+                    listing_id=listing.canonical_id,
+                    filter=search.filter_name,
+                    keyword=search.keyword,
+                )
 
-        self.advance_search()
-
-    @send_product.error
-    async def send_product_error(self, error: BaseException) -> None:
-        """Log unexpected task-level failures."""
-        print_error("send_product task crashed", error)
-
-    @send_product.before_loop
-    async def wait_until_reg(self) -> None:
-        """Wait for the Discord connection before starting the polling loop."""
-        await self.bot.wait_until_ready()
+        search_seconds = time.monotonic() - search_started_at
+        logger.info(
+            "Search finished",
+            context={
+                "filter": search.filter_name,
+                "keyword": search.keyword,
+                "listings": len(aggregated_listings),
+                "elapsed_seconds": f"{search_seconds:.2f}",
+            },
+        )
 
 
 async def entry(send_initial_items: bool = True) -> None:
     """Attach cogs and start the Discord client."""
+    configure_logging(settings.log_level)
     async with bot:
         await bot.add_cog(MercariSendBot(bot, send_initial_items=send_initial_items))
         await bot.start(settings.discord_key.get_secret_value())
