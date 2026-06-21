@@ -1,10 +1,13 @@
 """Scraping helpers for marketplace search pages."""
 
 import random
+from typing import cast
 from urllib.parse import urlencode
 
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -20,6 +23,12 @@ from .logging_utils import get_logger
 
 scraper_logger = get_logger("scraper")
 
+ITEM_CELL_SELECTOR = '[data-testid="item-cell"]'
+ITEM_LINK_TAG = "a"
+ITEM_IMAGE_TAG = "img"
+ITEM_TITLE_SELECTOR = ".merItemThumbnail"
+SEARCH_RESULTS_WAIT_SECONDS = 7
+
 
 def _search_context(search: SearchDefinition) -> dict[str, str]:
     """Return common log context for a search definition."""
@@ -31,96 +40,147 @@ def _search_context(search: SearchDefinition) -> dict[str, str]:
     }
 
 
-def mercari_link(driver, search: SearchDefinition) -> list[ListingRecord]:
+def _log_search_warning(search: SearchDefinition, message: str, exc: BaseException) -> None:
+    """Log a scraper warning with common search context."""
+    scraper_logger.warning(
+        message,
+        context={**_search_context(search), "exception": type(exc).__name__},
+    )
+
+
+def mercari_link(driver: WebDriver, search: SearchDefinition) -> list[ListingRecord]:
     """Scrape a Mercari search page and return normalized listings."""
     all_items: list[ListingRecord] = []
+    if not _load_mercari_page(driver, search):
+        return all_items
+
+    if not _wait_for_item_cells(driver, search):
+        return all_items
+
+    total_items = _find_item_cells(driver)
+    scraper_logger.debug("Scraped item cells", context={**_search_context(search), "items": len(total_items)})
+
+    all_items = _extract_listing_records(total_items, search)
+    _log_page_title(driver, search)
+    return all_items
+
+
+def _load_mercari_page(driver: WebDriver, search: SearchDefinition) -> bool:
+    """Load the Mercari search URL, returning false only for failed page loads."""
     try:
         driver.get(search.url)
     except TimeoutException as exc:
-        scraper_logger.warning(
+        _log_search_warning(
+            search,
             "Mercari page load timed out; attempting to stop the page load",
-            context={**_search_context(search), "exception": type(exc).__name__},
+            exc,
         )
         try:
             driver.execute_script("window.stop();")
         except WebDriverException as stop_exc:
-            scraper_logger.warning(
+            _log_search_warning(
+                search,
                 "Failed to stop timed-out Mercari page load",
-                context={**_search_context(search), "exception": type(stop_exc).__name__},
+                stop_exc,
             )
     except WebDriverException as exc:
-        scraper_logger.warning(
+        _log_search_warning(
+            search,
             "Mercari page load failed; search will return no listings",
-            context={**_search_context(search), "exception": type(exc).__name__},
+            exc,
         )
-        return all_items
+        return False
+    return True
 
+
+def _wait_for_item_cells(driver: WebDriver, search: SearchDefinition) -> bool:
+    """Wait for at least one item cell to appear on the current page."""
     try:
-        WebDriverWait(driver, 7).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="item-cell"]'))
+        WebDriverWait(driver, SEARCH_RESULTS_WAIT_SECONDS).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ITEM_CELL_SELECTOR))
         )
     except TimeoutException as exc:
-        scraper_logger.warning(
+        _log_search_warning(
+            search,
             "No item cells found before timeout; search will return no listings",
-            context={**_search_context(search), "exception": type(exc).__name__},
+            exc,
         )
-        return all_items
+        return False
+    return True
 
-    total_items = driver.find_elements(by=By.CSS_SELECTOR, value='[data-testid="item-cell"]')
 
-    scraper_logger.debug("Scraped item cells", context={**_search_context(search), "items": len(total_items)})
+def _find_item_cells(driver: WebDriver) -> list[WebElement]:
+    """Return all Mercari item cells from the current page."""
+    return driver.find_elements(by=By.CSS_SELECTOR, value=ITEM_CELL_SELECTOR)
 
+
+def _extract_listing_records(total_items: list[WebElement], search: SearchDefinition) -> list[ListingRecord]:
+    """Extract normalized listing records from Selenium item cells."""
+    all_items: list[ListingRecord] = []
     for item in total_items:
         try:
-            content = item.text
-            if not content.strip():
+            listing = _extract_listing_record(item, search)
+            if listing is None:
                 continue
-
-            link_scrape = item.find_element(by=By.TAG_NAME, value="a")
-            listing_url = link_scrape.get_attribute("href")
-            if not listing_url:
-                continue
-
-            image_scrape = item.find_element(by=By.TAG_NAME, value="img")
-            image = image_scrape.get_attribute("src")
-
-            full_title_scrape = item.find_element(By.CSS_SELECTOR, value=".merItemThumbnail")
-            full_title = full_title_scrape.get_attribute("aria-label")
-
-            all_items.append(
-                ListingRecord.from_scrape(
-                    marketplace=search.marketplace,
-                    url=listing_url,
-                    title=full_title,
-                    image_url=image,
-                    raw_content=content,
-                    search_context=SearchContext(
-                        filter_name=search.filter_name,
-                        keyword=search.keyword,
-                        search_url=search.url,
-                    ),
-                )
-            )
+            all_items.append(listing)
         except ValueError as exc:
-            scraper_logger.warning(
+            _log_search_warning(
+                search,
                 "Skipping invalid scraped listing",
-                context={**_search_context(search), "exception": type(exc).__name__},
+                exc,
             )
         except WebDriverException as exc:
-            scraper_logger.warning(
+            _log_search_warning(
+                search,
                 "Skipping listing after Selenium extraction error",
-                context={**_search_context(search), "exception": type(exc).__name__},
+                exc,
             )
+    return all_items
 
+
+def _extract_listing_record(item: WebElement, search: SearchDefinition) -> ListingRecord | None:
+    """Extract one listing record from a Selenium item cell."""
+    content = item.text
+    if not content.strip():
+        return None
+
+    listing_url = _element_attribute(item, By.TAG_NAME, ITEM_LINK_TAG, "href")
+    if not listing_url:
+        return None
+
+    image = _element_attribute(item, By.TAG_NAME, ITEM_IMAGE_TAG, "src")
+    full_title = cast(str, _element_attribute(item, By.CSS_SELECTOR, ITEM_TITLE_SELECTOR, "aria-label"))
+
+    return ListingRecord.from_scrape(
+        marketplace=search.marketplace,
+        url=listing_url,
+        title=full_title,
+        image_url=image,
+        raw_content=content,
+        search_context=SearchContext(
+            filter_name=search.filter_name,
+            keyword=search.keyword,
+            search_url=search.url,
+        ),
+    )
+
+
+def _element_attribute(item: WebElement, by: str, value: str, attribute: str) -> str | None:
+    """Return an attribute from a child element."""
+    element = item.find_element(by=by, value=value)
+    return element.get_attribute(attribute)
+
+
+def _log_page_title(driver: WebDriver, search: SearchDefinition) -> None:
+    """Log the page title when Selenium can still read it."""
     try:
         scraper_logger.debug("Scraped page title", context={**_search_context(search), "title": driver.title})
     except Exception as exc:
-        scraper_logger.warning(
+        _log_search_warning(
+            search,
             "Could not read scraped page title",
-            context={**_search_context(search), "exception": type(exc).__name__},
+            exc,
         )
-
-    return all_items
 
 
 def query_interval(search_count: int) -> float:

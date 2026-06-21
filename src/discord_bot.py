@@ -12,8 +12,8 @@ from discord.ext import commands
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
-from . import retrieveUtils as retrieve_utils
-from .browser_profile import BrowserProfile, build_fingerprint_script, pick_browser_profile
+from . import retrieve_utils, webdriver_utils
+from .browser_profile import BrowserProfile
 from .config import app_config, settings
 from .database import (
     discard_pending_alert_delivery,
@@ -21,8 +21,10 @@ from .database import (
     reserve_alert_delivery,
     upsert_listing,
 )
+from .discord_messages import View as View
+from .discord_messages import send_listing_message as send_discord_listing_message
 from .listings import ListingRecord, SearchDefinition
-from .logging_utils import configure_logging, get_logger, log_exception
+from .logging_utils import ContextLoggerAdapter, configure_logging, get_logger, log_exception
 from .rate_limiter import AsyncRateLimiter
 
 intents = discord.Intents.default()
@@ -72,66 +74,6 @@ class ScrapeWorker:
     search_count: int = 0
 
 
-class View(discord.ui.View):
-    """Persistent message actions for listing cards."""
-
-    def __init__(self) -> None:
-        """Create a persistent action row for listing messages."""
-        super().__init__(timeout=None)
-        self.is_saved = False
-        self.save_lock = asyncio.Lock()
-
-    def disable_save_actions(self) -> None:
-        """Disable interactive controls after a listing has been saved."""
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-
-    @discord.ui.button(label="Save Item", emoji="\N{WHITE HEAVY CHECK MARK}")
-    async def send_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        """Copy the current listing embed into the saved-items channel once."""
-        await interaction.response.defer(ephemeral=True, thinking=False)
-
-        if interaction.message is None or not interaction.message.embeds:
-            await interaction.followup.send("This listing message is missing its embed.", ephemeral=True)
-            return
-
-        async with self.save_lock:
-            if self.is_saved:
-                self.disable_save_actions()
-                await interaction.message.edit(view=self)
-                await interaction.followup.send("Listing already saved.", ephemeral=True)
-                return
-
-            channel = interaction.client.get_channel(int(settings.saved_channel_id))
-            if channel is None:
-                discord_logger.warning(
-                    "Saved-items channel is not available",
-                    context={"channel_id": settings.saved_channel_id},
-                )
-                await interaction.followup.send("Saved-items channel not found.", ephemeral=True)
-                return
-
-            embed = interaction.message.embeds[0]
-            try:
-                await channel.send(embed=embed)
-            except discord.DiscordException as exc:
-                log_exception(
-                    discord_logger,
-                    "Failed to send listing embed to saved-items channel",
-                    exc,
-                    channel_id=settings.saved_channel_id,
-                )
-                await interaction.followup.send("Saving failed. Try again.", ephemeral=True)
-                return
-
-            self.is_saved = True
-            self.disable_save_actions()
-            button.disabled = True
-            await interaction.message.edit(view=self)
-            await interaction.followup.send("Listing saved!", ephemeral=True)
-
-
 class MercariSendBot(commands.Cog):
     """Continuously scrape Mercari and post newly discovered products."""
 
@@ -151,69 +93,17 @@ class MercariSendBot(commands.Cog):
     @staticmethod
     def build_webdriver_options(profile: BrowserProfile) -> Options:
         """Build Chrome options for the shared scraping session."""
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument(f"--window-size={profile.width},{profile.height}")
-        options.add_argument(f"--lang={profile.locale}")
-        options.add_argument(f"--user-agent={profile.user_agent}")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        options.add_experimental_option(
-            "prefs",
-            {"intl.accept_languages": profile.accept_language},
-        )
-        return options
+        return webdriver_utils.build_webdriver_options(profile)
 
     @staticmethod
     def apply_browser_profile(driver: webdriver.Chrome, profile: BrowserProfile) -> None:
         """Apply stealth-oriented browser overrides to a new session."""
-        driver.execute_cdp_cmd("Network.enable", {})
-        driver.execute_cdp_cmd(
-            "Network.setUserAgentOverride",
-            {
-                "userAgent": profile.user_agent,
-                "acceptLanguage": profile.accept_language,
-                "platform": profile.platform,
-            },
-        )
-        driver.execute_cdp_cmd(
-            "Emulation.setDeviceMetricsOverride",
-            {
-                "width": profile.width,
-                "height": profile.height,
-                "deviceScaleFactor": profile.device_scale_factor,
-                "mobile": False,
-            },
-        )
-        driver.execute_cdp_cmd(
-            "Emulation.setTimezoneOverride",
-            {"timezoneId": profile.timezone},
-        )
-        driver.execute_cdp_cmd(
-            "Page.addScriptToEvaluateOnNewDocument",
-            {"source": build_fingerprint_script(profile)},
-        )
+        webdriver_utils.apply_browser_profile(driver, profile)
 
     @staticmethod
     async def create_driver() -> tuple[webdriver.Chrome, BrowserProfile]:
         """Create a Chrome webdriver without blocking the event loop."""
-        profile = pick_browser_profile()
-        options = MercariSendBot.build_webdriver_options(profile)
-        driver = await asyncio.to_thread(webdriver.Chrome, options=options)
-        await asyncio.to_thread(driver.set_page_load_timeout, settings.selenium_page_load_timeout_seconds)
-        await asyncio.to_thread(driver.set_script_timeout, settings.selenium_script_timeout_seconds)
-        try:
-            await asyncio.to_thread(MercariSendBot.apply_browser_profile, driver, profile)
-        except Exception as exc:
-            log_exception(
-                scraper_logger,
-                "Failed to apply browser profile overrides",
-                exc,
-                platform=profile.platform,
-                timezone=profile.timezone,
-            )
-        return driver, profile
+        return await webdriver_utils.create_driver()
 
     async def _ensure_worker_driver(self, worker: ScrapeWorker) -> webdriver.Chrome:
         """Create this worker's private webdriver if it does not already have one."""
@@ -266,27 +156,7 @@ class MercariSendBot(commands.Cog):
         item: ListingRecord,
     ) -> None:
         """Send a Discord embed for a single canonical listing."""
-        proxy_link = retrieve_utils.link_crafter(item.url) if item.marketplace == "mercari" else None
-        description_lines = [f"Marketplace: {item.marketplace.title()}"]
-
-        if item.matched_filters:
-            description_lines.append(f"Filters: {', '.join(sorted(item.matched_filters))}")
-        if item.matched_keywords:
-            description_lines.append(f"Keywords: {', '.join(sorted(item.matched_keywords))}")
-        if item.price_text:
-            description_lines.append(f"Price: {item.price_text}")
-        if proxy_link:
-            description_lines.append(f"Proxy: [Open listing]({proxy_link})")
-
-        embed = discord.Embed(
-            title=item.title,
-            url=item.url,
-            description="\n".join(description_lines),
-        )
-        if item.image_url:
-            embed.set_image(url=item.image_url)
-        embed.set_footer(text=f"ArchiveStatic | {item.canonical_id}")
-        await channel.send(embed=embed, view=View())
+        await send_discord_listing_message(channel, item)
 
     async def cog_load(self) -> None:
         """Start the scraper pool after the cog is loaded."""
@@ -460,14 +330,31 @@ class MercariSendBot(commands.Cog):
 
         driver = await self._ensure_worker_driver(worker)
         search_started_at = time.monotonic()
+        self._log_search_started(logger, search, self.search_queue.qsize())
+        aggregated_listings = await self._scrape_search_listings(worker, driver, search, logger)
+        await self._process_listing_alerts(channel, aggregated_listings, observed_at, search, logger)
+        self._log_search_finished(logger, search, aggregated_listings, search_started_at)
+
+    @staticmethod
+    def _log_search_started(logger: ContextLoggerAdapter, search: SearchDefinition, queue_depth: int) -> None:
+        """Log the beginning of a queued search."""
         logger.info(
             "Search started",
             context={
                 "filter": search.filter_name,
                 "keyword": search.keyword,
-                "queue_depth": self.search_queue.qsize(),
+                "queue_depth": queue_depth,
             },
         )
+
+    async def _scrape_search_listings(
+        self,
+        worker: ScrapeWorker,
+        driver: webdriver.Chrome,
+        search: SearchDefinition,
+        logger: ContextLoggerAdapter,
+    ) -> dict[str, ListingRecord]:
+        """Request a search page and return merged listing records."""
         await self.rate_limiter.acquire()
         logger.debug(
             "Requesting search page",
@@ -481,57 +368,102 @@ class MercariSendBot(commands.Cog):
                 reason=f"{worker.search_count} searches",
             )
 
+        return self._aggregate_listing_results(current_entries)
+
+    @staticmethod
+    def _aggregate_listing_results(current_entries: list[ListingRecord]) -> dict[str, ListingRecord]:
+        """Merge duplicate listings from a scrape into canonical records."""
         aggregated_listings: dict[str, ListingRecord] = {}
         retrieve_utils.merge_listing_results(aggregated_listings, current_entries)
+        return aggregated_listings
 
+    async def _process_listing_alerts(
+        self,
+        channel: discord.abc.Messageable,
+        aggregated_listings: dict[str, ListingRecord],
+        observed_at: datetime,
+        search: SearchDefinition,
+        logger: ContextLoggerAdapter,
+    ) -> None:
+        """Upsert scraped listings and deliver any required Discord alerts."""
         for listing in aggregated_listings.values():
-            delivery_id = None
-            message_sent = False
-            try:
-                is_new_listing = await upsert_listing(listing, observed_at=observed_at)
-                should_send_message = is_new_listing and (
-                    self.send_initial_items or not self.is_initial_scan
-                )
-                if not should_send_message:
-                    continue
+            await self._process_listing_alert(channel, listing, observed_at, search, logger)
 
-                delivery_id = await reserve_alert_delivery(
-                    listing,
-                    channel_id=str(channel.id),
-                    observed_at=observed_at,
-                )
-                if delivery_id is None:
-                    continue
+    async def _process_listing_alert(
+        self,
+        channel: discord.abc.Messageable,
+        listing: ListingRecord,
+        observed_at: datetime,
+        search: SearchDefinition,
+        logger: ContextLoggerAdapter,
+    ) -> None:
+        """Apply dedupe rules for a single listing and send its alert when needed."""
+        delivery_id = None
+        message_sent = False
+        try:
+            is_new_listing = await upsert_listing(listing, observed_at=observed_at)
+            should_send_message = self._should_send_listing_message(is_new_listing)
+            if not should_send_message:
+                return
 
-                await self.send_listing_message(channel, listing)
-                message_sent = True
+            delivery_id = await reserve_alert_delivery(
+                listing,
+                channel_id=str(channel.id),
+                observed_at=observed_at,
+            )
+            if delivery_id is None:
+                return
 
-                await mark_alert_delivery_sent(
-                    delivery_id,
-                    listing.canonical_id,
-                    delivered_at=observed_at,
-                )
-            except Exception as exc:
-                if delivery_id is not None and not message_sent:
-                    try:
-                        await discard_pending_alert_delivery(delivery_id)
-                    except Exception as discard_exc:
-                        log_exception(
-                            logger,
-                            "Failed to discard pending alert reservation",
-                            discard_exc,
-                            delivery_id=delivery_id,
-                            listing_id=listing.canonical_id,
-                        )
-                log_exception(
-                    logger,
-                    "Skipping listing after processing error",
-                    exc,
-                    listing_id=listing.canonical_id,
-                    filter=search.filter_name,
-                    keyword=search.keyword,
-                )
+            await self.send_listing_message(channel, listing)
+            message_sent = True
 
+            await mark_alert_delivery_sent(
+                delivery_id,
+                listing.canonical_id,
+                delivered_at=observed_at,
+            )
+        except Exception as exc:
+            if delivery_id is not None and not message_sent:
+                await self._discard_pending_alert_delivery(delivery_id, listing, logger)
+            log_exception(
+                logger,
+                "Skipping listing after processing error",
+                exc,
+                listing_id=listing.canonical_id,
+                filter=search.filter_name,
+                keyword=search.keyword,
+            )
+
+    def _should_send_listing_message(self, is_new_listing: bool) -> bool:
+        """Return whether a new listing should be sent for the current scan phase."""
+        return is_new_listing and (self.send_initial_items or not self.is_initial_scan)
+
+    @staticmethod
+    async def _discard_pending_alert_delivery(
+        delivery_id: str,
+        listing: ListingRecord,
+        logger: ContextLoggerAdapter,
+    ) -> None:
+        """Discard a pending delivery reservation after a failed Discord send."""
+        try:
+            await discard_pending_alert_delivery(delivery_id)
+        except Exception as discard_exc:
+            log_exception(
+                logger,
+                "Failed to discard pending alert reservation",
+                discard_exc,
+                delivery_id=delivery_id,
+                listing_id=listing.canonical_id,
+            )
+
+    @staticmethod
+    def _log_search_finished(
+        logger: ContextLoggerAdapter,
+        search: SearchDefinition,
+        aggregated_listings: dict[str, ListingRecord],
+        search_started_at: float,
+    ) -> None:
+        """Log the end of a completed search."""
         search_seconds = time.monotonic() - search_started_at
         logger.info(
             "Search finished",
