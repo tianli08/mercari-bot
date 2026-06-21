@@ -1,5 +1,9 @@
 # PROJECT.md - Discord Marketplace Monitor Bot (Mercari-first, Rakuma/Rakuten planned)
 
+Adding app .exe functionality so that users can add to their own discord along with plan own keywords for search.
+
+Currently setting ai datasets for only fashion items. Other items will not have the chance to be filtered.
+
 ## Project Overview
 This repository currently contains a **Python-based Discord bot** focused on **Mercari Japan**. It polls Mercari search pages for **newly listed items** matching configured keywords and posts alerts to Discord.  
 Rakuma and Rakuten are part of the planned direction, but are **not implemented yet** beyond placeholder constants and roadmap notes.
