@@ -1,3 +1,6 @@
+> ⚠️ **Legacy notes.** The SaaS design is governed by `ARCHITECTURE.md`. Sections below
+> describe the original single-tenant bot and are kept for historical context only.
+
 # PROJECT.md - Discord Marketplace Monitor Bot (Mercari-first, Rakuma/Rakuten planned)
 
 ## Project Overview
