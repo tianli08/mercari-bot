@@ -1,6 +1,8 @@
 """Discord bot worker for scraping and sending listing alerts."""
 
 import asyncio
+import contextlib
+import logging
 import os
 import random
 import time
@@ -57,11 +59,24 @@ def configured_filter_channels() -> dict[str, str]:
 
 
 FILTER_CHANNEL_IDS = configured_filter_channels()
+SELENIUM_CONNECTION_LOGGER = "urllib3.connectionpool"
 
 
 def worker_logger(worker_id: int):
     """Return a logger bound to a worker component tag."""
     return get_logger(f"worker {worker_id}")
+
+
+@contextlib.contextmanager
+def quiet_selenium_shutdown_warnings():
+    """Suppress Selenium connection retries while a browser session is being torn down."""
+    logger = logging.getLogger(SELENIUM_CONNECTION_LOGGER)
+    previous_level = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        logger.setLevel(previous_level)
 
 
 @dataclass(slots=True)
@@ -135,7 +150,8 @@ class MercariSendBot(commands.Cog):
         logger = worker_logger(worker.worker_id)
         logger.info("Quitting Chrome session")
         try:
-            await asyncio.to_thread(driver.quit)
+            with quiet_selenium_shutdown_warnings():
+                await asyncio.to_thread(driver.quit)
         except Exception as exc:
             log_exception(logger, "Failed to quit Chrome session cleanly", exc)
 

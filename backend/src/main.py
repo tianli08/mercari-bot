@@ -9,7 +9,10 @@ from .config import settings
 
 def run_bot(send_initial_items: bool) -> None:
     """Start the Discord bot event loop."""
-    asyncio.run(discord_bot.entry(send_initial_items=send_initial_items))
+    try:
+        asyncio.run(discord_bot.entry(send_initial_items=send_initial_items))
+    except KeyboardInterrupt:
+        pass
 
 
 def parse_args() -> argparse.Namespace:
