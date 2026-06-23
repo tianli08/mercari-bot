@@ -12,6 +12,18 @@ channel_id.env
 # Virtual environments
 .venv
 
+# Tooling caches
+.ruff_cache/
+
+# Frontend (web/)
+web/node_modules/
+web/.next/
+web/out/
+web/.env*.local
+
+# Infra
+infra/**/*.local
+
 target/
 
 .DS_Store

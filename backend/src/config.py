@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     query_interval_max_seconds: float = 20.0
     worker_pool_size: int = 2
     cycle_pause_seconds: float = 5.0
+    send_initial_items: bool = False
     max_requests_per_minute: float = 15.0
     worker_startup_stagger_seconds: float = 2.0
     log_level: str = "INFO"
