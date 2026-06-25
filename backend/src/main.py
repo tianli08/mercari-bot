@@ -31,11 +31,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Non-interactive service entrypoint for the marketplace monitor bot."""
     args = parse_args()
-    send_initial_items = (
-        args.send_initial_items
-        if args.send_initial_items is not None
-        else settings.send_initial_items
-    )
+    send_initial_items = args.send_initial_items if args.send_initial_items is not None else settings.send_initial_items
     run_bot(send_initial_items=send_initial_items)
 
 

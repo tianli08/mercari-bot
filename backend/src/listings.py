@@ -106,8 +106,7 @@ class ListingRecord:
         self.matched_keywords.update(other.matched_keywords)
 
         existing_contexts = {
-            (context.filter_name, context.keyword, context.search_url)
-            for context in self.search_contexts
+            (context.filter_name, context.keyword, context.search_url) for context in self.search_contexts
         }
         for context in other.search_contexts:
             context_key = (context.filter_name, context.keyword, context.search_url)
