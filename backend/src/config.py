@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     marketplace_db_name: str | None = None
     listings_collection_name: str | None = None
     alerts_collection_name: str | None = None
+    users_collection_name: str | None = None
     mercari_db_name: str | None = None
     mercari_collection_name: str | None = None
 
@@ -99,6 +100,11 @@ class Settings(BaseSettings):
     def mongo_alerts_collection_name(self) -> str:
         """Return the alert delivery collection name."""
         return self.alerts_collection_name or "listing_alerts"
+
+    @property
+    def mongo_users_collection_name(self) -> str:
+        """Return the users collection name."""
+        return self.users_collection_name or "users"
 
 
 settings = Settings()

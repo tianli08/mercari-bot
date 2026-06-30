@@ -1,14 +1,17 @@
-"""MongoDB persistence for canonical listings and alert deliveries."""
+"""MongoDB persistence for canonical listings, alert deliveries, and tenant users."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import motor.motor_asyncio
 from pymongo import ASCENDING
+from pymongo.errors import DuplicateKeyError
 
 from .config import settings
 from .listings import ListingRecord
+from .users import EmailAlreadyExistsError, UserPlan, UserRecord, UserStatus, normalize_email
 
 
 class DatabaseClient:
@@ -31,10 +34,11 @@ class DatabaseClient:
         self.db = self.client[settings.mongo_database_name]
         self.listings = self.db[settings.mongo_listings_collection_name]
         self.alerts = self.db[settings.mongo_alerts_collection_name]
+        self.users = self.db[settings.mongo_users_collection_name]
         self._indexes_ready = False
 
     async def ensure_indexes(self) -> None:
-        """Create the indexes needed for canonical listings and alert dedupe."""
+        """Create the indexes needed for canonical listings, alert dedupe, and users."""
         if self._indexes_ready:
             return
 
@@ -51,10 +55,57 @@ class DatabaseClient:
             name="listing_channel_unique",
         )
         await self.alerts.create_index("status", name="alert_status_idx")
+        await self.users.create_index("email", unique=True, name="users_email_unique")
+        await self.users.create_index("status", name="users_status_idx")
         self._indexes_ready = True
 
 
 db_client = DatabaseClient()
+
+
+async def create_user(
+    email: str,
+    password_hash: str,
+    *,
+    status: UserStatus | str = UserStatus.ACTIVE,
+    plan: UserPlan | str = UserPlan.FREE,
+    created_at: datetime | None = None,
+) -> UserRecord:
+    """Create a tenant user and return the inserted record."""
+    await db_client.ensure_indexes()
+
+    user = UserRecord.new(
+        email=email,
+        password_hash=password_hash,
+        status=status,
+        plan=plan,
+        created_at=created_at,
+    )
+    try:
+        await db_client.users.insert_one(user.to_document())
+    except DuplicateKeyError as exc:
+        raise EmailAlreadyExistsError(normalize_email(email)) from exc
+    return user
+
+
+async def get_user_by_id(tenant_id: str) -> UserRecord | None:
+    """Return a tenant user by stable tenant id."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.users.find_one({"_id": tenant_id})
+    if document is None:
+        return None
+    return _document_to_user(document)
+
+
+async def get_user_by_email(email: str) -> UserRecord | None:
+    """Return a tenant user by normalized email address."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.users.find_one({"email": normalize_email(email)})
+    if document is None:
+        return None
+    return _document_to_user(document)
 
 
 async def upsert_listing(listing: ListingRecord, observed_at: datetime | None = None) -> bool:
@@ -178,3 +229,21 @@ async def discard_pending_alert_delivery(delivery_id: str) -> None:
     """Delete a reserved alert if Discord delivery fails."""
     await db_client.ensure_indexes()
     await db_client.alerts.delete_one({"_id": delivery_id, "status": "pending"})
+
+
+def _document_to_user(document: dict[str, Any]) -> UserRecord:
+    return UserRecord(
+        _id=document["_id"],
+        email=document["email"],
+        password_hash=document["password_hash"],
+        created_at=_as_utc(document["created_at"]),
+        updated_at=_as_utc(document["updated_at"]),
+        status=UserStatus(document["status"]),
+        plan=UserPlan(document["plan"]),
+    )
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
