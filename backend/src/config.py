@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     listings_collection_name: str | None = None
     alerts_collection_name: str | None = None
     users_collection_name: str | None = None
+    watchlists_collection_name: str | None = None
     mercari_db_name: str | None = None
     mercari_collection_name: str | None = None
 
@@ -105,6 +106,11 @@ class Settings(BaseSettings):
     def mongo_users_collection_name(self) -> str:
         """Return the users collection name."""
         return self.users_collection_name or "users"
+
+    @property
+    def mongo_watchlists_collection_name(self) -> str:
+        """Return the watchlists collection name."""
+        return self.watchlists_collection_name or "watchlists"
 
 
 settings = Settings()
