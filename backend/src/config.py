@@ -44,6 +44,8 @@ class Settings(BaseSettings):
 
     mongo_uri: SecretStr
     discord_key: SecretStr
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    destination_secret_key: SecretStr
     designer_webhook: str
     designer_channel_id: str
     saved_channel_id: str
@@ -84,6 +86,7 @@ class Settings(BaseSettings):
     alerts_collection_name: str | None = None
     users_collection_name: str | None = None
     watchlists_collection_name: str | None = None
+    destinations_collection_name: str | None = None
     mercari_db_name: str | None = None
     mercari_collection_name: str | None = None
 
@@ -111,6 +114,11 @@ class Settings(BaseSettings):
     def mongo_watchlists_collection_name(self) -> str:
         """Return the watchlists collection name."""
         return self.watchlists_collection_name or "watchlists"
+
+    @property
+    def mongo_destinations_collection_name(self) -> str:
+        """Return the destinations collection name."""
+        return self.destinations_collection_name or "destinations"
 
 
 settings = Settings()

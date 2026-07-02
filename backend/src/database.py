@@ -1,4 +1,4 @@
-"""MongoDB persistence for canonical listings, alert deliveries, tenant users, and watchlists."""
+"""MongoDB persistence for listings, alert deliveries, tenant users, watchlists, and destinations."""
 
 from __future__ import annotations
 
@@ -10,6 +10,15 @@ from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from .config import settings
+from .destinations import (
+    DestinationLabelExistsError,
+    DestinationNotFoundError,
+    DestinationRecord,
+    DestinationType,
+    encrypt_webhook_url,
+    normalize_label,
+    validate_webhook_url,
+)
 from .listings import ListingRecord
 from .users import EmailAlreadyExistsError, UserPlan, UserRecord, UserStatus, normalize_email
 from .watchlists import (
@@ -44,10 +53,11 @@ class DatabaseClient:
         self.alerts = self.db[settings.mongo_alerts_collection_name]
         self.users = self.db[settings.mongo_users_collection_name]
         self.watchlists = self.db[settings.mongo_watchlists_collection_name]
+        self.destinations = self.db[settings.mongo_destinations_collection_name]
         self._indexes_ready = False
 
     async def ensure_indexes(self) -> None:
-        """Create the indexes needed for canonical listings, alert dedupe, users, and watchlists."""
+        """Create the indexes needed for listings, alert dedupe, users, watchlists, and destinations."""
         if self._indexes_ready:
             return
 
@@ -73,6 +83,12 @@ class DatabaseClient:
             name="watchlists_owner_name_unique",
         )
         await self.watchlists.create_index("enabled", name="watchlists_enabled_idx")
+        await self.destinations.create_index("owner_id", name="destinations_owner_idx")
+        await self.destinations.create_index(
+            [("owner_id", ASCENDING), ("label", ASCENDING)],
+            unique=True,
+            name="destinations_owner_label_unique",
+        )
         self._indexes_ready = True
 
 
@@ -233,6 +249,106 @@ async def delete_watchlist(watchlist_id: str) -> bool:
     return result.deleted_count > 0
 
 
+async def create_destination(
+    owner_id: str,
+    webhook_url: str,
+    label: str,
+    *,
+    type: DestinationType | str = DestinationType.DISCORD_WEBHOOK,
+    created_at: datetime | None = None,
+) -> DestinationRecord:
+    """Create a tenant destination and return the inserted record."""
+    await db_client.ensure_indexes()
+
+    destination = DestinationRecord.new(
+        owner_id=owner_id,
+        webhook_url=webhook_url,
+        label=label,
+        type=type,
+        created_at=created_at,
+    )
+    try:
+        await db_client.destinations.insert_one(destination.to_document())
+    except DuplicateKeyError as exc:
+        raise DestinationLabelExistsError("destination label already exists for this owner") from exc
+    return destination
+
+
+async def get_destination_by_id(destination_id: str) -> DestinationRecord | None:
+    """Return a destination by id."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.destinations.find_one({"_id": destination_id})
+    if document is None:
+        return None
+    return _document_to_destination(document)
+
+
+async def list_destinations_for_owner(owner_id: str) -> list[DestinationRecord]:
+    """Return all destinations owned by a tenant."""
+    await db_client.ensure_indexes()
+
+    documents = await db_client.destinations.find({"owner_id": owner_id}).to_list(length=None)
+    return [_document_to_destination(document) for document in documents]
+
+
+async def update_destination(
+    destination_id: str,
+    *,
+    label: str | None = None,
+    webhook_url: str | None = None,
+) -> DestinationRecord:
+    """Update mutable destination fields and return the updated record."""
+    await db_client.ensure_indexes()
+
+    update_document: dict[str, Any] = {"updated_at": datetime.now(UTC)}
+    if label is not None:
+        update_document["label"] = normalize_label(label)
+    if webhook_url is not None:
+        update_document["webhook_url_encrypted"] = encrypt_webhook_url(validate_webhook_url(webhook_url))
+        update_document["verified_at"] = None
+
+    try:
+        document = await db_client.destinations.find_one_and_update(
+            {"_id": destination_id},
+            {"$set": update_document},
+            return_document=ReturnDocument.AFTER,
+        )
+    except DuplicateKeyError as exc:
+        raise DestinationLabelExistsError("destination label already exists for this owner") from exc
+    if document is None:
+        raise DestinationNotFoundError(destination_id)
+    return _document_to_destination(document)
+
+
+async def mark_destination_verified(
+    destination_id: str,
+    verified_at: datetime | None = None,
+) -> DestinationRecord:
+    """Set a destination's verification timestamp and return the updated record."""
+    await db_client.ensure_indexes()
+
+    timestamp = datetime.now(UTC)
+    verification_timestamp = _as_utc(verified_at) if verified_at is not None else timestamp
+    document = await db_client.destinations.find_one_and_update(
+        {"_id": destination_id},
+        {"$set": {"verified_at": verification_timestamp, "updated_at": timestamp}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if document is None:
+        raise DestinationNotFoundError(destination_id)
+    return _document_to_destination(document)
+
+
+async def delete_destination(destination_id: str) -> bool:
+    """Delete a destination and return whether a document was removed."""
+    await db_client.ensure_indexes()
+
+    # Watchlist reference integrity is enforced by the API layer in a later phase.
+    result = await db_client.destinations.delete_one({"_id": destination_id})
+    return result.deleted_count > 0
+
+
 async def upsert_listing(listing: ListingRecord, observed_at: datetime | None = None) -> bool:
     """Upsert a canonical listing document and return whether it was new."""
     await db_client.ensure_indexes()
@@ -377,6 +493,20 @@ def _document_to_watchlist(document: dict[str, Any]) -> WatchlistRecord:
         filters=WatchlistFilters.from_document(document.get("filters")),
         destination_id=document["destination_id"],
         enabled=document["enabled"],
+        created_at=_as_utc(document["created_at"]),
+        updated_at=_as_utc(document["updated_at"]),
+    )
+
+
+def _document_to_destination(document: dict[str, Any]) -> DestinationRecord:
+    verified_at = document.get("verified_at")
+    return DestinationRecord(
+        _id=document["_id"],
+        owner_id=document["owner_id"],
+        type=DestinationType(document["type"]),
+        webhook_url_encrypted=document["webhook_url_encrypted"],
+        label=document["label"],
+        verified_at=_as_utc(verified_at) if verified_at is not None else None,
         created_at=_as_utc(document["created_at"]),
         updated_at=_as_utc(document["updated_at"]),
     )
