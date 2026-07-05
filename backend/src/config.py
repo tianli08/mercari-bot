@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     users_collection_name: str | None = None
     watchlists_collection_name: str | None = None
     destinations_collection_name: str | None = None
+    keyword_registry_collection_name: str | None = None
     mercari_db_name: str | None = None
     mercari_collection_name: str | None = None
 
@@ -119,6 +120,11 @@ class Settings(BaseSettings):
     def mongo_destinations_collection_name(self) -> str:
         """Return the destinations collection name."""
         return self.destinations_collection_name or "destinations"
+
+    @property
+    def mongo_keyword_registry_collection_name(self) -> str:
+        """Return the keyword registry collection name."""
+        return self.keyword_registry_collection_name or "keyword_registry"
 
 
 settings = Settings()

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, model_validator
 
+from .keyword_registry import normalize_registry_keyword
 from .listings import extract_price, infer_listing_status
 
 
@@ -155,8 +156,11 @@ def normalize_keywords(keywords: list[str]) -> list[str]:
     normalized_keywords: list[str] = []
     seen: set[str] = set()
     for keyword in keywords:
-        normalized_keyword = keyword.strip().lower()
-        if not normalized_keyword or normalized_keyword in seen:
+        try:
+            normalized_keyword = normalize_registry_keyword(keyword)
+        except ValueError:
+            continue
+        if normalized_keyword in seen:
             continue
         normalized_keywords.append(normalized_keyword)
         seen.add(normalized_keyword)
