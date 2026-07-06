@@ -1,4 +1,7 @@
-"""MongoDB persistence for listings, alert deliveries, tenants, watchlists, destinations, and keywords."""
+"""MongoDB persistence for marketplace monitoring data.
+
+Includes listings, per-destination alert deliveries, tenants, watchlists, destinations, and keywords.
+"""
 
 from __future__ import annotations
 
@@ -65,7 +68,10 @@ class DatabaseClient:
         self._indexes_ready = False
 
     async def ensure_indexes(self) -> None:
-        """Create the indexes needed for listings, alert dedupe, tenants, watchlists, destinations, and keywords."""
+        """Create the indexes needed for marketplace monitoring data.
+
+        Includes listings, destination alert dedupe, tenants, watchlists, destinations, and keywords.
+        """
         if self._indexes_ready:
             return
 
@@ -77,10 +83,11 @@ class DatabaseClient:
         await self.listings.create_index("last_seen_at", name="last_seen_at_idx")
         await self.listings.create_index("matched_filters", name="matched_filters_idx")
         await self.alerts.create_index(
-            [("listing_id", ASCENDING), ("channel_id", ASCENDING)],
+            [("listing_id", ASCENDING), ("destination_id", ASCENDING)],
             unique=True,
-            name="listing_channel_unique",
+            name="listing_destination_unique",
         )
+        await self.alerts.create_index("owner_id", name="alerts_owner_idx")
         await self.alerts.create_index("status", name="alert_status_idx")
         await self.users.create_index("email", unique=True, name="users_email_unique")
         await self.users.create_index("status", name="users_status_idx")
@@ -664,21 +671,29 @@ async def upsert_listing(listing: ListingRecord, observed_at: datetime | None = 
 
 async def reserve_alert_delivery(
     listing: ListingRecord,
-    channel_id: str,
+    destination_id: str,
+    *,
+    owner_id: str | None = None,
     observed_at: datetime | None = None,
 ) -> str | None:
-    """Reserve a delivery slot and return its id if this alert is new."""
+    """Reserve a per-destination delivery slot and return its id if this alert is new.
+
+    Listings remain globally deduped by canonical listing id, while alert delivery is scoped to one
+    destination plus that canonical listing. Legacy single-operator Discord calls leave ``owner_id`` as
+    ``None``; tenant fan-out must pass a concrete owner id in later phases.
+    """
     await db_client.ensure_indexes()
 
     timestamp = observed_at or datetime.now(UTC)
-    delivery_id = f"{channel_id}:{listing.canonical_id}"
+    delivery_id = f"{destination_id}:{listing.canonical_id}"
     result = await db_client.alerts.update_one(
         {"_id": delivery_id},
         {
             "$setOnInsert": {
                 "_id": delivery_id,
                 "listing_id": listing.canonical_id,
-                "channel_id": channel_id,
+                "destination_id": destination_id,
+                "owner_id": owner_id,
                 "marketplace": listing.marketplace,
                 "item_id": listing.item_id,
                 "canonical_url": listing.url,

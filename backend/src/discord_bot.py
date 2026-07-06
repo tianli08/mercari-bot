@@ -424,7 +424,7 @@ class MercariSendBot(commands.Cog):
 
             delivery_id = await reserve_alert_delivery(
                 listing,
-                channel_id=str(channel.id),
+                destination_id=str(channel.id),
                 observed_at=observed_at,
             )
             if delivery_id is None:
