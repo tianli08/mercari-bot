@@ -1,4 +1,7 @@
-"""MongoDB persistence for listings, alert deliveries, tenant users, watchlists, and destinations."""
+"""MongoDB persistence for marketplace monitoring data.
+
+Includes listings, per-destination alert deliveries, tenants, watchlists, destinations, keywords, and presets.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +22,15 @@ from .destinations import (
     normalize_label,
     validate_webhook_url,
 )
-from .listings import ListingRecord
+from .keyword_registry import (
+    KeywordRegistryEntryNotFoundError,
+    KeywordRegistryRecord,
+    RegistrySubscriber,
+    build_registry_id,
+    normalize_registry_keyword,
+)
+from .listings import ListingRecord, Marketplace
+from .presets import PresetKeywordRecord, PresetNameExistsError, PresetNotFoundError
 from .users import EmailAlreadyExistsError, UserPlan, UserRecord, UserStatus, normalize_email
 from .watchlists import (
     WatchlistFilters,
@@ -54,10 +65,15 @@ class DatabaseClient:
         self.users = self.db[settings.mongo_users_collection_name]
         self.watchlists = self.db[settings.mongo_watchlists_collection_name]
         self.destinations = self.db[settings.mongo_destinations_collection_name]
+        self.keyword_registry = self.db[settings.mongo_keyword_registry_collection_name]
+        self.preset_keywords = self.db[settings.mongo_preset_keywords_collection_name]
         self._indexes_ready = False
 
     async def ensure_indexes(self) -> None:
-        """Create the indexes needed for listings, alert dedupe, users, watchlists, and destinations."""
+        """Create the indexes needed for marketplace monitoring data.
+
+        Includes listings, destination alert dedupe, tenants, watchlists, destinations, keywords, and presets.
+        """
         if self._indexes_ready:
             return
 
@@ -69,10 +85,11 @@ class DatabaseClient:
         await self.listings.create_index("last_seen_at", name="last_seen_at_idx")
         await self.listings.create_index("matched_filters", name="matched_filters_idx")
         await self.alerts.create_index(
-            [("listing_id", ASCENDING), ("channel_id", ASCENDING)],
+            [("listing_id", ASCENDING), ("destination_id", ASCENDING)],
             unique=True,
-            name="listing_channel_unique",
+            name="listing_destination_unique",
         )
+        await self.alerts.create_index("owner_id", name="alerts_owner_idx")
         await self.alerts.create_index("status", name="alert_status_idx")
         await self.users.create_index("email", unique=True, name="users_email_unique")
         await self.users.create_index("status", name="users_status_idx")
@@ -89,6 +106,21 @@ class DatabaseClient:
             unique=True,
             name="destinations_owner_label_unique",
         )
+        await self.keyword_registry.create_index(
+            [("marketplace", ASCENDING), ("keyword", ASCENDING)],
+            unique=True,
+            name="keyword_registry_marketplace_keyword_unique",
+        )
+        await self.keyword_registry.create_index("subscriber_count", name="keyword_registry_subscriber_count_idx")
+        await self.keyword_registry.create_index("last_scraped_at", name="keyword_registry_last_scraped_at_idx")
+        preset_keywords = getattr(self, "preset_keywords", None)
+        if preset_keywords is not None:
+            await preset_keywords.create_index(
+                [("marketplace", ASCENDING), ("name", ASCENDING)],
+                unique=True,
+                name="preset_keywords_marketplace_name_unique",
+            )
+            await preset_keywords.create_index("enabled", name="preset_keywords_enabled_idx")
         self._indexes_ready = True
 
 
@@ -166,6 +198,7 @@ async def create_watchlist(
         await db_client.watchlists.insert_one(watchlist.to_document())
     except DuplicateKeyError as exc:
         raise WatchlistNameExistsError("watchlist name already exists for this owner") from exc
+    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=[])
     return watchlist
 
 
@@ -202,6 +235,11 @@ async def update_watchlist(
     """Update mutable watchlist fields and return the updated record."""
     await db_client.ensure_indexes()
 
+    previous_document = await db_client.watchlists.find_one({"_id": watchlist_id})
+    if previous_document is None:
+        raise WatchlistNotFoundError(watchlist_id)
+    previous_watchlist = _document_to_watchlist(previous_document)
+
     update_document: dict[str, Any] = {"updated_at": datetime.now(UTC)}
     if name is not None:
         update_document["name"] = normalize_watchlist_name(name)
@@ -224,12 +262,20 @@ async def update_watchlist(
         raise WatchlistNameExistsError("watchlist name already exists for this owner") from exc
     if document is None:
         raise WatchlistNotFoundError(watchlist_id)
-    return _document_to_watchlist(document)
+    watchlist = _document_to_watchlist(document)
+    previous_keywords = previous_watchlist.keywords if previous_watchlist.enabled else []
+    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=previous_keywords)
+    return watchlist
 
 
 async def set_watchlist_enabled(watchlist_id: str, enabled: bool) -> WatchlistRecord:
     """Set a watchlist's enabled flag and return the updated record."""
     await db_client.ensure_indexes()
+
+    previous_document = await db_client.watchlists.find_one({"_id": watchlist_id})
+    if previous_document is None:
+        raise WatchlistNotFoundError(watchlist_id)
+    previous_watchlist = _document_to_watchlist(previous_document)
 
     document = await db_client.watchlists.find_one_and_update(
         {"_id": watchlist_id},
@@ -238,15 +284,303 @@ async def set_watchlist_enabled(watchlist_id: str, enabled: bool) -> WatchlistRe
     )
     if document is None:
         raise WatchlistNotFoundError(watchlist_id)
-    return _document_to_watchlist(document)
+    watchlist = _document_to_watchlist(document)
+    previous_keywords = previous_watchlist.keywords if previous_watchlist.enabled else []
+    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=previous_keywords)
+    return watchlist
 
 
 async def delete_watchlist(watchlist_id: str) -> bool:
     """Delete a watchlist and return whether a document was removed."""
     await db_client.ensure_indexes()
 
+    previous_document = await db_client.watchlists.find_one({"_id": watchlist_id})
+    if previous_document is None:
+        return False
+
     result = await db_client.watchlists.delete_one({"_id": watchlist_id})
+    if result.deleted_count > 0:
+        await remove_watchlist_subscriptions(watchlist_id, "mercari")
     return result.deleted_count > 0
+
+
+async def upsert_preset_keyword(record: PresetKeywordRecord) -> tuple[PresetKeywordRecord, bool]:
+    """Upsert a preset keyword record and return the stored record plus insert status."""
+    await db_client.ensure_indexes()
+
+    record_document = record.to_document()
+    try:
+        result = await db_client.preset_keywords.update_one(
+            {"_id": record._id},
+            {
+                "$setOnInsert": {
+                    "_id": record_document["_id"],
+                    "marketplace": record_document["marketplace"],
+                    "created_at": record_document["created_at"],
+                },
+                "$set": {
+                    "name": record_document["name"],
+                    "keywords": record_document["keywords"],
+                    "enabled": record_document["enabled"],
+                    "updated_at": record_document["updated_at"],
+                },
+            },
+            upsert=True,
+        )
+    except DuplicateKeyError as exc:
+        raise PresetNameExistsError("preset name already exists for this marketplace") from exc
+
+    document = await db_client.preset_keywords.find_one({"_id": record._id})
+    if document is None:
+        raise PresetNotFoundError(record._id)
+    return _document_to_preset_keyword(document), result.upserted_id is not None
+
+
+async def get_preset_keyword_by_id(preset_id: str) -> PresetKeywordRecord | None:
+    """Return a preset keyword by deterministic id."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.preset_keywords.find_one({"_id": preset_id})
+    if document is None:
+        return None
+    return _document_to_preset_keyword(document)
+
+
+async def list_preset_keywords(
+    marketplace: Marketplace = "mercari",
+    *,
+    enabled_only: bool = True,
+) -> list[PresetKeywordRecord]:
+    """Return preset keywords for a marketplace sorted by display name."""
+    await db_client.ensure_indexes()
+
+    query: dict[str, Any] = {"marketplace": marketplace}
+    if enabled_only:
+        query["enabled"] = True
+    documents = await db_client.preset_keywords.find(query).sort([("name", ASCENDING)]).to_list(length=None)
+    return [_document_to_preset_keyword(document) for document in documents]
+
+
+async def subscribe_keyword(
+    marketplace: Marketplace,
+    keyword: str,
+    *,
+    owner_id: str,
+    watchlist_id: str,
+) -> KeywordRegistryRecord:
+    """Subscribe a watchlist to a marketplace keyword and return the registry entry."""
+    await db_client.ensure_indexes()
+
+    normalized_keyword = normalize_registry_keyword(keyword)
+    registry_id = build_registry_id(marketplace, normalized_keyword)
+    timestamp = datetime.now(UTC)
+    subscriber = RegistrySubscriber(owner_id=owner_id, watchlist_id=watchlist_id)
+    subscriber_document = subscriber.to_document()
+    subscriber_absent_query: dict[str, Any] = {
+        "_id": registry_id,
+        "subscribers": {"$not": {"$elemMatch": subscriber_document}},
+    }
+    update_document = {
+        "$setOnInsert": {
+            "_id": registry_id,
+            "marketplace": marketplace,
+            "keyword": normalized_keyword,
+            "last_scraped_at": None,
+            "created_at": timestamp,
+        },
+        "$addToSet": {"subscribers": subscriber_document},
+        "$inc": {"subscriber_count": 1},
+        "$set": {"updated_at": timestamp},
+    }
+
+    for _ in range(2):
+        try:
+            await db_client.keyword_registry.update_one(subscriber_absent_query, update_document, upsert=True)
+        except DuplicateKeyError:
+            await db_client.keyword_registry.update_one(subscriber_absent_query, update_document)
+
+        document = await db_client.keyword_registry.find_one({"_id": registry_id})
+        if document is not None:
+            return _document_to_keyword_registry(document)
+
+    raise KeywordRegistryEntryNotFoundError(registry_id)
+
+
+async def unsubscribe_keyword(
+    marketplace: Marketplace,
+    keyword: str,
+    *,
+    owner_id: str,
+    watchlist_id: str,
+) -> None:
+    """Unsubscribe a watchlist from a marketplace keyword."""
+    await db_client.ensure_indexes()
+
+    normalized_keyword = normalize_registry_keyword(keyword)
+    registry_id = build_registry_id(marketplace, normalized_keyword)
+    subscriber_document = RegistrySubscriber(owner_id=owner_id, watchlist_id=watchlist_id).to_document()
+    result = await db_client.keyword_registry.update_one(
+        {"_id": registry_id, "subscribers": {"$elemMatch": subscriber_document}},
+        {
+            "$pull": {"subscribers": subscriber_document},
+            "$inc": {"subscriber_count": -1},
+            "$set": {"updated_at": datetime.now(UTC)},
+        },
+    )
+    if result.matched_count > 0:
+        await db_client.keyword_registry.delete_one({"_id": registry_id, "subscribers": {"$size": 0}})
+
+
+async def sync_watchlist_subscriptions(
+    watchlist: WatchlistRecord,
+    marketplace: Marketplace,
+    *,
+    previous_keywords: list[str] | None = None,
+) -> None:
+    """Synchronize registry subscriptions for one watchlist."""
+    await db_client.ensure_indexes()
+
+    desired_keywords = normalize_keywords(watchlist.keywords) if watchlist.enabled else []
+    desired_keyword_set = set(desired_keywords)
+    if previous_keywords is None:
+        await _remove_watchlist_subscriptions_except(
+            watchlist._id,
+            marketplace,
+            keep_keywords=desired_keyword_set,
+        )
+        previous_keyword_set: set[str] = set()
+    else:
+        previous_keyword_set = set(normalize_keywords(previous_keywords))
+
+    for keyword_to_remove in previous_keyword_set - desired_keyword_set:
+        await unsubscribe_keyword(
+            marketplace,
+            keyword_to_remove,
+            owner_id=watchlist.owner_id,
+            watchlist_id=watchlist._id,
+        )
+
+    for keyword_to_add in desired_keywords:
+        if keyword_to_add in previous_keyword_set:
+            continue
+        await subscribe_keyword(
+            marketplace,
+            keyword_to_add,
+            owner_id=watchlist.owner_id,
+            watchlist_id=watchlist._id,
+        )
+
+
+async def remove_watchlist_subscriptions(watchlist_id: str, marketplace: Marketplace) -> None:
+    """Remove a watchlist from every registry entry for a marketplace."""
+    await db_client.ensure_indexes()
+
+    await _remove_watchlist_subscriptions_except(watchlist_id, marketplace, keep_keywords=set())
+
+
+async def get_registry_entry(marketplace: Marketplace, keyword: str) -> KeywordRegistryRecord | None:
+    """Return a keyword registry entry by marketplace and keyword."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.keyword_registry.find_one({"_id": build_registry_id(marketplace, keyword)})
+    if document is None:
+        return None
+    return _document_to_keyword_registry(document)
+
+
+async def list_active_registry_entries(
+    marketplace: Marketplace,
+    *,
+    stale_before: datetime | None = None,
+    limit: int | None = None,
+) -> list[KeywordRegistryRecord]:
+    """Return active registry entries ordered by scrape urgency."""
+    await db_client.ensure_indexes()
+
+    query: dict[str, Any] = {
+        "marketplace": marketplace,
+        "subscriber_count": {"$gt": 0},
+    }
+    if stale_before is not None:
+        query["$or"] = [
+            {"last_scraped_at": None},
+            {"last_scraped_at": {"$lt": _as_utc(stale_before)}},
+        ]
+
+    cursor = db_client.keyword_registry.find(query).sort(
+        [("last_scraped_at", ASCENDING), ("keyword", ASCENDING)]
+    )
+    if limit is not None:
+        cursor = cursor.limit(limit)
+    documents = await cursor.to_list(length=limit)
+    return [_document_to_keyword_registry(document) for document in documents]
+
+
+async def mark_keyword_scraped(
+    marketplace: Marketplace,
+    keyword: str,
+    scraped_at: datetime | None = None,
+) -> KeywordRegistryRecord:
+    """Set a registry entry's scrape timestamp and return the updated entry."""
+    await db_client.ensure_indexes()
+
+    timestamp = datetime.now(UTC)
+    scraped_timestamp = _as_utc(scraped_at) if scraped_at is not None else timestamp
+    document = await db_client.keyword_registry.find_one_and_update(
+        {"_id": build_registry_id(marketplace, keyword)},
+        {"$set": {"last_scraped_at": scraped_timestamp, "updated_at": timestamp}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if document is None:
+        raise KeywordRegistryEntryNotFoundError(build_registry_id(marketplace, keyword))
+    return _document_to_keyword_registry(document)
+
+
+async def rebuild_keyword_registry(marketplace: Marketplace) -> int:
+    """Rebuild one marketplace's registry projection from enabled watchlists."""
+    await db_client.ensure_indexes()
+
+    desired_subscribers: dict[str, list[RegistrySubscriber]] = {}
+    desired_seen: dict[str, set[RegistrySubscriber]] = {}
+    watchlist_documents = await db_client.watchlists.find({"enabled": True}).to_list(length=None)
+    for watchlist_document in watchlist_documents:
+        watchlist = _document_to_watchlist(watchlist_document)
+        for keyword in normalize_keywords(watchlist.keywords):
+            subscriber = RegistrySubscriber(owner_id=watchlist.owner_id, watchlist_id=watchlist._id)
+            if subscriber in desired_seen.setdefault(keyword, set()):
+                continue
+            desired_subscribers.setdefault(keyword, []).append(subscriber)
+            desired_seen[keyword].add(subscriber)
+
+    existing_documents = await db_client.keyword_registry.find({"marketplace": marketplace}).to_list(length=None)
+    timestamp = datetime.now(UTC)
+    for keyword, subscribers in desired_subscribers.items():
+        registry_id = build_registry_id(marketplace, keyword)
+        subscriber_documents = [subscriber.to_document() for subscriber in subscribers]
+        await db_client.keyword_registry.update_one(
+            {"_id": registry_id},
+            {
+                "$setOnInsert": {
+                    "_id": registry_id,
+                    "marketplace": marketplace,
+                    "keyword": keyword,
+                    "last_scraped_at": None,
+                    "created_at": timestamp,
+                },
+                "$set": {
+                    "subscribers": subscriber_documents,
+                    "subscriber_count": len(subscriber_documents),
+                    "updated_at": timestamp,
+                },
+            },
+            upsert=True,
+        )
+
+    for document in existing_documents:
+        if document["keyword"] not in desired_subscribers:
+            await db_client.keyword_registry.delete_one({"_id": document["_id"]})
+
+    return len(desired_subscribers)
 
 
 async def create_destination(
@@ -404,21 +738,29 @@ async def upsert_listing(listing: ListingRecord, observed_at: datetime | None = 
 
 async def reserve_alert_delivery(
     listing: ListingRecord,
-    channel_id: str,
+    destination_id: str,
+    *,
+    owner_id: str | None = None,
     observed_at: datetime | None = None,
 ) -> str | None:
-    """Reserve a delivery slot and return its id if this alert is new."""
+    """Reserve a per-destination delivery slot and return its id if this alert is new.
+
+    Listings remain globally deduped by canonical listing id, while alert delivery is scoped to one
+    destination plus that canonical listing. Legacy single-operator Discord calls leave ``owner_id`` as
+    ``None``; tenant fan-out must pass a concrete owner id in later phases.
+    """
     await db_client.ensure_indexes()
 
     timestamp = observed_at or datetime.now(UTC)
-    delivery_id = f"{channel_id}:{listing.canonical_id}"
+    delivery_id = f"{destination_id}:{listing.canonical_id}"
     result = await db_client.alerts.update_one(
         {"_id": delivery_id},
         {
             "$setOnInsert": {
                 "_id": delivery_id,
                 "listing_id": listing.canonical_id,
-                "channel_id": channel_id,
+                "destination_id": destination_id,
+                "owner_id": owner_id,
                 "marketplace": listing.marketplace,
                 "item_id": listing.item_id,
                 "canonical_url": listing.url,
@@ -510,6 +852,58 @@ def _document_to_destination(document: dict[str, Any]) -> DestinationRecord:
         created_at=_as_utc(document["created_at"]),
         updated_at=_as_utc(document["updated_at"]),
     )
+
+
+def _document_to_keyword_registry(document: dict[str, Any]) -> KeywordRegistryRecord:
+    last_scraped_at = document.get("last_scraped_at")
+    return KeywordRegistryRecord(
+        _id=document["_id"],
+        marketplace=document["marketplace"],
+        keyword=document["keyword"],
+        subscribers=[
+            RegistrySubscriber.from_document(subscriber) for subscriber in document.get("subscribers", [])
+        ],
+        subscriber_count=document.get("subscriber_count", len(document.get("subscribers", []))),
+        last_scraped_at=_as_utc(last_scraped_at) if last_scraped_at is not None else None,
+        created_at=_as_utc(document["created_at"]),
+        updated_at=_as_utc(document["updated_at"]),
+    )
+
+
+def _document_to_preset_keyword(document: dict[str, Any]) -> PresetKeywordRecord:
+    return PresetKeywordRecord(
+        _id=document["_id"],
+        marketplace=document["marketplace"],
+        name=document["name"],
+        keywords=document["keywords"],
+        enabled=document["enabled"],
+        created_at=_as_utc(document["created_at"]),
+        updated_at=_as_utc(document["updated_at"]),
+    )
+
+
+async def _remove_watchlist_subscriptions_except(
+    watchlist_id: str,
+    marketplace: Marketplace,
+    *,
+    keep_keywords: set[str],
+) -> None:
+    documents = await db_client.keyword_registry.find(
+        {"marketplace": marketplace, "subscribers.watchlist_id": watchlist_id}
+    ).to_list(length=None)
+    for document in documents:
+        keyword = document["keyword"]
+        if keyword in keep_keywords:
+            continue
+        for subscriber in document.get("subscribers", []):
+            if subscriber.get("watchlist_id") != watchlist_id:
+                continue
+            await unsubscribe_keyword(
+                marketplace,
+                keyword,
+                owner_id=subscriber["owner_id"],
+                watchlist_id=watchlist_id,
+            )
 
 
 def _coerce_watchlist_filters(filters: WatchlistFilters | dict[str, Any]) -> WatchlistFilters:

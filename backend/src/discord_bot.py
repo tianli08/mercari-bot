@@ -16,7 +16,7 @@ from selenium.webdriver.chrome.options import Options
 
 from . import retrieve_utils, webdriver_utils
 from .browser_profile import BrowserProfile
-from .config import app_config, settings
+from .config import get_legacy_app_config, settings
 from .database import (
     discard_pending_alert_delivery,
     mark_alert_delivery_sent,
@@ -41,7 +41,7 @@ def configured_filter_channels() -> dict[str, str]:
     """Return filter-name to channel-id mappings from config and environment."""
     channels: dict[str, str] = {}
     extra_settings = settings.model_extra or {}
-    for filter_data in app_config.filters:
+    for filter_data in get_legacy_app_config().filters:
         if filter_data.channel_id:
             channels[filter_data.name] = filter_data.channel_id
             continue
@@ -424,7 +424,7 @@ class MercariSendBot(commands.Cog):
 
             delivery_id = await reserve_alert_delivery(
                 listing,
-                channel_id=str(channel.id),
+                destination_id=str(channel.id),
                 observed_at=observed_at,
             )
             if delivery_id is None:
