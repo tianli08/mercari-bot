@@ -1,6 +1,6 @@
 """MongoDB persistence for marketplace monitoring data.
 
-Includes listings, per-destination alert deliveries, tenants, watchlists, destinations, and keywords.
+Includes listings, per-destination alert deliveries, tenants, watchlists, destinations, keywords, and presets.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from .keyword_registry import (
     normalize_registry_keyword,
 )
 from .listings import ListingRecord, Marketplace
+from .presets import PresetKeywordRecord, PresetNameExistsError, PresetNotFoundError
 from .users import EmailAlreadyExistsError, UserPlan, UserRecord, UserStatus, normalize_email
 from .watchlists import (
     WatchlistFilters,
@@ -65,12 +66,13 @@ class DatabaseClient:
         self.watchlists = self.db[settings.mongo_watchlists_collection_name]
         self.destinations = self.db[settings.mongo_destinations_collection_name]
         self.keyword_registry = self.db[settings.mongo_keyword_registry_collection_name]
+        self.preset_keywords = self.db[settings.mongo_preset_keywords_collection_name]
         self._indexes_ready = False
 
     async def ensure_indexes(self) -> None:
         """Create the indexes needed for marketplace monitoring data.
 
-        Includes listings, destination alert dedupe, tenants, watchlists, destinations, and keywords.
+        Includes listings, destination alert dedupe, tenants, watchlists, destinations, keywords, and presets.
         """
         if self._indexes_ready:
             return
@@ -111,6 +113,14 @@ class DatabaseClient:
         )
         await self.keyword_registry.create_index("subscriber_count", name="keyword_registry_subscriber_count_idx")
         await self.keyword_registry.create_index("last_scraped_at", name="keyword_registry_last_scraped_at_idx")
+        preset_keywords = getattr(self, "preset_keywords", None)
+        if preset_keywords is not None:
+            await preset_keywords.create_index(
+                [("marketplace", ASCENDING), ("name", ASCENDING)],
+                unique=True,
+                name="preset_keywords_marketplace_name_unique",
+            )
+            await preset_keywords.create_index("enabled", name="preset_keywords_enabled_idx")
         self._indexes_ready = True
 
 
@@ -292,6 +302,63 @@ async def delete_watchlist(watchlist_id: str) -> bool:
     if result.deleted_count > 0:
         await remove_watchlist_subscriptions(watchlist_id, "mercari")
     return result.deleted_count > 0
+
+
+async def upsert_preset_keyword(record: PresetKeywordRecord) -> tuple[PresetKeywordRecord, bool]:
+    """Upsert a preset keyword record and return the stored record plus insert status."""
+    await db_client.ensure_indexes()
+
+    record_document = record.to_document()
+    try:
+        result = await db_client.preset_keywords.update_one(
+            {"_id": record._id},
+            {
+                "$setOnInsert": {
+                    "_id": record_document["_id"],
+                    "marketplace": record_document["marketplace"],
+                    "created_at": record_document["created_at"],
+                },
+                "$set": {
+                    "name": record_document["name"],
+                    "keywords": record_document["keywords"],
+                    "enabled": record_document["enabled"],
+                    "updated_at": record_document["updated_at"],
+                },
+            },
+            upsert=True,
+        )
+    except DuplicateKeyError as exc:
+        raise PresetNameExistsError("preset name already exists for this marketplace") from exc
+
+    document = await db_client.preset_keywords.find_one({"_id": record._id})
+    if document is None:
+        raise PresetNotFoundError(record._id)
+    return _document_to_preset_keyword(document), result.upserted_id is not None
+
+
+async def get_preset_keyword_by_id(preset_id: str) -> PresetKeywordRecord | None:
+    """Return a preset keyword by deterministic id."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.preset_keywords.find_one({"_id": preset_id})
+    if document is None:
+        return None
+    return _document_to_preset_keyword(document)
+
+
+async def list_preset_keywords(
+    marketplace: Marketplace = "mercari",
+    *,
+    enabled_only: bool = True,
+) -> list[PresetKeywordRecord]:
+    """Return preset keywords for a marketplace sorted by display name."""
+    await db_client.ensure_indexes()
+
+    query: dict[str, Any] = {"marketplace": marketplace}
+    if enabled_only:
+        query["enabled"] = True
+    documents = await db_client.preset_keywords.find(query).sort([("name", ASCENDING)]).to_list(length=None)
+    return [_document_to_preset_keyword(document) for document in documents]
 
 
 async def subscribe_keyword(
@@ -798,6 +865,18 @@ def _document_to_keyword_registry(document: dict[str, Any]) -> KeywordRegistryRe
         ],
         subscriber_count=document.get("subscriber_count", len(document.get("subscribers", []))),
         last_scraped_at=_as_utc(last_scraped_at) if last_scraped_at is not None else None,
+        created_at=_as_utc(document["created_at"]),
+        updated_at=_as_utc(document["updated_at"]),
+    )
+
+
+def _document_to_preset_keyword(document: dict[str, Any]) -> PresetKeywordRecord:
+    return PresetKeywordRecord(
+        _id=document["_id"],
+        marketplace=document["marketplace"],
+        name=document["name"],
+        keywords=document["keywords"],
+        enabled=document["enabled"],
         created_at=_as_utc(document["created_at"]),
         updated_at=_as_utc(document["updated_at"]),
     )

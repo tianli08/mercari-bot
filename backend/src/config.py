@@ -1,5 +1,6 @@
 """Runtime configuration models and environment-backed settings."""
 
+import functools
 import glob
 from pathlib import Path
 from typing import ClassVar
@@ -88,6 +89,7 @@ class Settings(BaseSettings):
     watchlists_collection_name: str | None = None
     destinations_collection_name: str | None = None
     keyword_registry_collection_name: str | None = None
+    preset_keywords_collection_name: str | None = None
     mercari_db_name: str | None = None
     mercari_collection_name: str | None = None
 
@@ -126,6 +128,16 @@ class Settings(BaseSettings):
         """Return the keyword registry collection name."""
         return self.keyword_registry_collection_name or "keyword_registry"
 
+    @property
+    def mongo_preset_keywords_collection_name(self) -> str:
+        """Return the preset keyword catalog collection name."""
+        return self.preset_keywords_collection_name or "preset_keywords"
+
 
 settings = Settings()
-app_config = AppConfig.from_json()
+
+
+@functools.cache
+def get_legacy_app_config() -> AppConfig:
+    """Load the legacy JSON keyword config on first use."""
+    return AppConfig.from_json()

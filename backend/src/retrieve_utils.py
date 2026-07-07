@@ -11,7 +11,7 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from .config import app_config, settings
+from .config import get_legacy_app_config, settings
 from .constants import BUYEE_LINK, MERCARI_BASE_URL
 from .listings import (
     ListingRecord,
@@ -205,7 +205,7 @@ def query_interval(search_count: int) -> float:
 def link_generator() -> list[SearchDefinition]:
     """Generate normalized Mercari search definitions."""
     all_urls: list[SearchDefinition] = []
-    for filter_data in app_config.filters:
+    for filter_data in get_legacy_app_config().filters:
         for keyword in filter_data.keywords:
             params = {"keyword": keyword, "sort": "created_time", "order": "desc"}
             url = f"{MERCARI_BASE_URL}?{urlencode(params)}"
