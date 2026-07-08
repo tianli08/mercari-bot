@@ -11,6 +11,7 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from . import database
 from .config import get_legacy_app_config, settings
 from .constants import BUYEE_LINK, MERCARI_BASE_URL
 from .listings import (
@@ -28,6 +29,12 @@ ITEM_LINK_TAG = "a"
 ITEM_IMAGE_TAG = "img"
 ITEM_TITLE_SELECTOR = ".merItemThumbnail"
 SEARCH_RESULTS_WAIT_SECONDS = 7
+
+
+def mercari_search_url(keyword: str) -> str:
+    """Build the Mercari search URL used by the scraper."""
+    params = {"keyword": keyword, "sort": "created_time", "order": "desc"}
+    return f"{MERCARI_BASE_URL}?{urlencode(params)}"
 
 
 def _search_context(search: SearchDefinition) -> dict[str, str]:
@@ -207,17 +214,29 @@ def link_generator() -> list[SearchDefinition]:
     all_urls: list[SearchDefinition] = []
     for filter_data in get_legacy_app_config().filters:
         for keyword in filter_data.keywords:
-            params = {"keyword": keyword, "sort": "created_time", "order": "desc"}
-            url = f"{MERCARI_BASE_URL}?{urlencode(params)}"
             all_urls.append(
                 SearchDefinition(
                     marketplace="mercari",
                     filter_name=filter_data.name,
                     keyword=keyword,
-                    url=url,
+                    url=mercari_search_url(keyword),
                 )
             )
     return all_urls
+
+
+async def registry_search_definitions(marketplace: str = "mercari") -> list[SearchDefinition]:
+    """Return active registry keywords as scraper search definitions."""
+    registry_entries = await database.list_active_registry_entries(marketplace)
+    return [
+        SearchDefinition(
+            marketplace=entry.marketplace,
+            filter_name=entry.keyword,
+            keyword=entry.keyword,
+            url=mercari_search_url(entry.keyword),
+        )
+        for entry in registry_entries
+    ]
 
 
 def merge_listing_results(

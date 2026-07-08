@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import logging
 import os
-import random
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,11 +19,13 @@ from .config import get_legacy_app_config, settings
 from .database import (
     discard_pending_alert_delivery,
     mark_alert_delivery_sent,
+    mark_keyword_scraped,
     reserve_alert_delivery,
     upsert_listing,
 )
 from .discord_messages import View as View
 from .discord_messages import send_listing_message as send_discord_listing_message
+from .keyword_registry import KeywordRegistryEntryNotFoundError
 from .listings import ListingRecord, SearchDefinition
 from .logging_utils import ContextLoggerAdapter, configure_logging, get_logger, log_exception
 from .rate_limiter import AsyncRateLimiter
@@ -97,7 +98,7 @@ class MercariSendBot(commands.Cog):
         self.bot = discord_bot
         self.send_initial_items = send_initial_items
         self.is_initial_scan = True
-        self.searches = retrieve_utils.link_generator()
+        self.searches: list[SearchDefinition] = []
         self.search_queue: asyncio.Queue[SearchDefinition] = asyncio.Queue()
         self.rate_limiter = AsyncRateLimiter(settings.max_requests_per_minute)
         self.workers: list[ScrapeWorker] = []
@@ -219,7 +220,7 @@ class MercariSendBot(commands.Cog):
                 "Starting Mercari scraper pool",
                 context={
                     "workers": worker_count,
-                    "searches": len(self.searches),
+                    "search_source": "keyword_registry",
                     "max_requests_per_minute": f"{settings.max_requests_per_minute:.2f}",
                 },
             )
@@ -233,16 +234,15 @@ class MercariSendBot(commands.Cog):
                 )
                 self._worker_tasks.append(task)
                 worker_logger(worker.worker_id).info("Worker task launched")
-                if self.searches:
-                    try:
-                        await self._ensure_worker_driver(worker)
-                    except Exception as exc:
-                        log_exception(
-                            worker_logger(worker.worker_id),
-                            "Failed to prewarm Chrome session",
-                            exc,
-                        )
-                        await self._restart_worker_driver(worker, reason="startup failure")
+                try:
+                    await self._ensure_worker_driver(worker)
+                except Exception as exc:
+                    log_exception(
+                        worker_logger(worker.worker_id),
+                        "Failed to prewarm Chrome session",
+                        exc,
+                    )
+                    await self._restart_worker_driver(worker, reason="startup failure")
                 if worker.worker_id < worker_count and startup_stagger > 0:
                     await asyncio.sleep(startup_stagger)
 
@@ -260,15 +260,25 @@ class MercariSendBot(commands.Cog):
         cycle_number = 0
         try:
             while True:
-                if not self.searches:
+                try:
+                    cycle_searches = await retrieve_utils.registry_search_definitions("mercari")
+                except Exception as exc:
+                    log_exception(
+                        dispatcher_logger,
+                        "Failed to load registry searches; dispatcher is sleeping before retry",
+                        exc,
+                    )
+                    await asyncio.sleep(60)
+                    continue
+
+                self.searches = cycle_searches
+                if not cycle_searches:
                     dispatcher_logger.warning("No searches configured; dispatcher is sleeping", context={"sleep": 60})
                     await asyncio.sleep(60)
                     continue
 
                 cycle_number += 1
                 cycle_started_at = time.monotonic()
-                cycle_searches = list(self.searches)
-                random.shuffle(cycle_searches)
 
                 for search in cycle_searches:
                     await self.search_queue.put(search)
@@ -348,8 +358,11 @@ class MercariSendBot(commands.Cog):
         search_started_at = time.monotonic()
         self._log_search_started(logger, search, self.search_queue.qsize())
         aggregated_listings = await self._scrape_search_listings(worker, driver, search, logger)
-        await self._process_listing_alerts(channel, aggregated_listings, observed_at, search, logger)
-        self._log_search_finished(logger, search, aggregated_listings, search_started_at)
+        try:
+            await self._process_listing_alerts(channel, aggregated_listings, observed_at, search, logger)
+            self._log_search_finished(logger, search, aggregated_listings, search_started_at)
+        finally:
+            await self._mark_registry_search_scraped(search, logger)
 
     @staticmethod
     def _log_search_started(logger: ContextLoggerAdapter, search: SearchDefinition, queue_depth: int) -> None:
@@ -447,6 +460,25 @@ class MercariSendBot(commands.Cog):
                 exc,
                 listing_id=listing.canonical_id,
                 filter=search.filter_name,
+                keyword=search.keyword,
+            )
+
+    @staticmethod
+    async def _mark_registry_search_scraped(search: SearchDefinition, logger: ContextLoggerAdapter) -> None:
+        """Stamp registry scrape progress without disturbing worker execution."""
+        try:
+            await mark_keyword_scraped(search.marketplace, search.keyword)
+        except KeywordRegistryEntryNotFoundError:
+            logger.info(
+                "Registry entry disappeared before scrape progress could be stamped",
+                context={"marketplace": search.marketplace, "keyword": search.keyword},
+            )
+        except Exception as exc:
+            log_exception(
+                logger,
+                "Failed to stamp registry scrape progress",
+                exc,
+                marketplace=search.marketplace,
                 keyword=search.keyword,
             )
 
