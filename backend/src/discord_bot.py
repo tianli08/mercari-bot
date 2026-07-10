@@ -8,22 +8,25 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import aiohttp
 import discord
 from discord.ext import commands
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
 from . import retrieve_utils, webdriver_utils
+from .alert_fanout import (
+    DiscordWebhookSender,
+    LegacyDeliveryTarget,
+    ScrapeResult,
+    fan_out_listing_alerts,
+)
 from .browser_profile import BrowserProfile
 from .config import get_legacy_app_config, settings
 from .database import (
-    discard_pending_alert_delivery,
-    mark_alert_delivery_sent,
     mark_keyword_scraped,
-    reserve_alert_delivery,
     upsert_listing,
 )
-from .discord_messages import View as View
 from .discord_messages import send_listing_message as send_discord_listing_message
 from .keyword_registry import KeywordRegistryEntryNotFoundError
 from .listings import ListingRecord, SearchDefinition
@@ -105,6 +108,7 @@ class MercariSendBot(commands.Cog):
         self._launcher_task: asyncio.Task[None] | None = None
         self._dispatcher_task: asyncio.Task[None] | None = None
         self._worker_tasks: list[asyncio.Task[None]] = []
+        self._webhook_session: aiohttp.ClientSession | None = None
 
     @staticmethod
     def build_webdriver_options(profile: BrowserProfile) -> Options:
@@ -200,10 +204,14 @@ class MercariSendBot(commands.Cog):
                 return_exceptions=True,
             )
 
+        if self._webhook_session is not None and not self._webhook_session.closed:
+            await self._webhook_session.close()
+
         self._launcher_task = None
         self._dispatcher_task = None
         self._worker_tasks.clear()
         self.workers.clear()
+        self._webhook_session = None
 
     async def _launch_scraper_pool(self) -> None:
         """Wait for Discord readiness, then launch the fixed scraper pool."""
@@ -345,24 +353,16 @@ class MercariSendBot(commands.Cog):
         """Scrape one search and process newly discovered listings."""
         logger = worker_logger(worker.worker_id)
         observed_at = datetime.now(UTC)
-        channel = self.get_channel_for_filter(search.filter_name)
-        if channel is None:
-            channel_id = FILTER_CHANNEL_IDS.get(search.filter_name) or settings.designer_channel_id
-            logger.warning(
-                "Skipping search because alert channel is not available",
-                context={"filter": search.filter_name, "keyword": search.keyword, "channel_id": channel_id},
-            )
-            return
-
         driver = await self._ensure_worker_driver(worker)
         search_started_at = time.monotonic()
         self._log_search_started(logger, search, self.search_queue.qsize())
         aggregated_listings = await self._scrape_search_listings(worker, driver, search, logger)
         try:
-            await self._process_listing_alerts(channel, aggregated_listings, observed_at, search, logger)
-            self._log_search_finished(logger, search, aggregated_listings, search_started_at)
+            scrape_results = await self._persist_scrape_results(aggregated_listings, observed_at, search, logger)
+            await self._fan_out_scrape_results(scrape_results, observed_at, search, logger)
         finally:
             await self._mark_registry_search_scraped(search, logger)
+        self._log_search_finished(logger, search, aggregated_listings, search_started_at)
 
     @staticmethod
     def _log_search_started(logger: ContextLoggerAdapter, search: SearchDefinition, queue_depth: int) -> None:
@@ -406,62 +406,86 @@ class MercariSendBot(commands.Cog):
         retrieve_utils.merge_listing_results(aggregated_listings, current_entries)
         return aggregated_listings
 
-    async def _process_listing_alerts(
+    async def _persist_scrape_results(
         self,
-        channel: discord.abc.Messageable,
         aggregated_listings: dict[str, ListingRecord],
         observed_at: datetime,
         search: SearchDefinition,
         logger: ContextLoggerAdapter,
-    ) -> None:
-        """Upsert scraped listings and deliver any required Discord alerts."""
+    ) -> list[ScrapeResult]:
+        """Upsert scraped listings and return delivery-neutral scrape results."""
+        scrape_results: list[ScrapeResult] = []
         for listing in aggregated_listings.values():
-            await self._process_listing_alert(channel, listing, observed_at, search, logger)
+            try:
+                is_new_listing = await upsert_listing(listing, observed_at=observed_at)
+            except Exception as exc:
+                log_exception(
+                    logger,
+                    "Skipping listing after persistence error",
+                    exc,
+                    listing_id=listing.canonical_id,
+                    filter=search.filter_name,
+                    keyword=search.keyword,
+                )
+                continue
+            scrape_results.append(ScrapeResult(listing=listing, is_new_listing=is_new_listing))
+        return scrape_results
 
-    async def _process_listing_alert(
+    async def _fan_out_scrape_results(
         self,
-        channel: discord.abc.Messageable,
-        listing: ListingRecord,
+        scrape_results: list[ScrapeResult],
         observed_at: datetime,
         search: SearchDefinition,
         logger: ContextLoggerAdapter,
     ) -> None:
-        """Apply dedupe rules for a single listing and send its alert when needed."""
-        delivery_id = None
-        message_sent = False
+        """Deliver persisted scrape results through tenant fan-out."""
         try:
-            is_new_listing = await upsert_listing(listing, observed_at=observed_at)
-            should_send_message = self._should_send_listing_message(is_new_listing)
-            if not should_send_message:
-                return
-
-            delivery_id = await reserve_alert_delivery(
-                listing,
-                destination_id=str(channel.id),
+            await fan_out_listing_alerts(
+                marketplace=search.marketplace,
+                keyword=search.keyword,
+                scrape_results=scrape_results,
+                should_send_listing=self._should_send_listing_message,
                 observed_at=observed_at,
-            )
-            if delivery_id is None:
-                return
-
-            await self.send_listing_message(channel, listing)
-            message_sent = True
-
-            await mark_alert_delivery_sent(
-                delivery_id,
-                listing.canonical_id,
-                delivered_at=observed_at,
+                destination_sender=DiscordWebhookSender(await self._ensure_webhook_session()),
+                legacy_alerts_enabled=settings.legacy_channel_alerts_enabled,
+                legacy_target_factory=lambda: self._legacy_delivery_target(search, logger),
+                logger=logger,
             )
         except Exception as exc:
-            if delivery_id is not None and not message_sent:
-                await self._discard_pending_alert_delivery(delivery_id, listing, logger)
             log_exception(
                 logger,
-                "Skipping listing after processing error",
+                "Fan-out failed after scrape persistence",
                 exc,
-                listing_id=listing.canonical_id,
+                marketplace=search.marketplace,
                 filter=search.filter_name,
                 keyword=search.keyword,
             )
+
+    async def _ensure_webhook_session(self) -> aiohttp.ClientSession:
+        """Return the shared webhook HTTP session, creating it lazily."""
+        if self._webhook_session is None or self._webhook_session.closed:
+            self._webhook_session = aiohttp.ClientSession()
+        return self._webhook_session
+
+    def _legacy_delivery_target(
+        self,
+        search: SearchDefinition,
+        logger: ContextLoggerAdapter,
+    ) -> LegacyDeliveryTarget | None:
+        """Return the legacy bot-channel target for keywords without registry subscribers."""
+        channel = self.get_channel_for_filter(search.filter_name)
+        if channel is None:
+            channel_id = FILTER_CHANNEL_IDS.get(search.filter_name) or settings.designer_channel_id
+            logger.warning(
+                "Legacy alert channel is not available",
+                context={"filter": search.filter_name, "keyword": search.keyword, "channel_id": channel_id},
+            )
+            return None
+
+        return LegacyDeliveryTarget(
+            destination_id=str(channel.id),
+            send_listing=lambda listing: self.send_listing_message(channel, listing),
+        )
 
     @staticmethod
     async def _mark_registry_search_scraped(search: SearchDefinition, logger: ContextLoggerAdapter) -> None:
@@ -485,24 +509,6 @@ class MercariSendBot(commands.Cog):
     def _should_send_listing_message(self, is_new_listing: bool) -> bool:
         """Return whether a new listing should be sent for the current scan phase."""
         return is_new_listing and (self.send_initial_items or not self.is_initial_scan)
-
-    @staticmethod
-    async def _discard_pending_alert_delivery(
-        delivery_id: str,
-        listing: ListingRecord,
-        logger: ContextLoggerAdapter,
-    ) -> None:
-        """Discard a pending delivery reservation after a failed Discord send."""
-        try:
-            await discard_pending_alert_delivery(delivery_id)
-        except Exception as discard_exc:
-            log_exception(
-                logger,
-                "Failed to discard pending alert reservation",
-                discard_exc,
-                delivery_id=delivery_id,
-                listing_id=listing.canonical_id,
-            )
 
     @staticmethod
     def _log_search_finished(

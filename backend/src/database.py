@@ -5,6 +5,7 @@ Includes listings, per-destination alert deliveries, tenants, watchlists, destin
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -210,6 +211,18 @@ async def get_watchlist_by_id(watchlist_id: str) -> WatchlistRecord | None:
     if document is None:
         return None
     return _document_to_watchlist(document)
+
+
+async def get_watchlists_by_ids(watchlist_ids: Iterable[str]) -> dict[str, WatchlistRecord]:
+    """Return watchlists keyed by id for the provided ids."""
+    unique_ids = list(dict.fromkeys(watchlist_ids))
+    if not unique_ids:
+        return {}
+
+    await db_client.ensure_indexes()
+
+    documents = await db_client.watchlists.find({"_id": {"$in": unique_ids}}).to_list(length=None)
+    return {document["_id"]: _document_to_watchlist(document) for document in documents}
 
 
 async def list_watchlists_for_owner(owner_id: str, *, enabled_only: bool = False) -> list[WatchlistRecord]:
@@ -507,9 +520,7 @@ async def list_active_registry_entries(
             {"last_scraped_at": {"$lt": _as_utc(stale_before)}},
         ]
 
-    cursor = db_client.keyword_registry.find(query).sort(
-        [("last_scraped_at", ASCENDING), ("keyword", ASCENDING)]
-    )
+    cursor = db_client.keyword_registry.find(query).sort([("last_scraped_at", ASCENDING), ("keyword", ASCENDING)])
     if limit is not None:
         cursor = cursor.limit(limit)
     documents = await cursor.to_list(length=limit)
@@ -616,6 +627,18 @@ async def get_destination_by_id(destination_id: str) -> DestinationRecord | None
     if document is None:
         return None
     return _document_to_destination(document)
+
+
+async def get_destinations_by_ids(destination_ids: Iterable[str]) -> dict[str, DestinationRecord]:
+    """Return destinations keyed by id for the provided ids."""
+    unique_ids = list(dict.fromkeys(destination_ids))
+    if not unique_ids:
+        return {}
+
+    await db_client.ensure_indexes()
+
+    documents = await db_client.destinations.find({"_id": {"$in": unique_ids}}).to_list(length=None)
+    return {document["_id"]: _document_to_destination(document) for document in documents}
 
 
 async def list_destinations_for_owner(owner_id: str) -> list[DestinationRecord]:
@@ -860,9 +883,7 @@ def _document_to_keyword_registry(document: dict[str, Any]) -> KeywordRegistryRe
         _id=document["_id"],
         marketplace=document["marketplace"],
         keyword=document["keyword"],
-        subscribers=[
-            RegistrySubscriber.from_document(subscriber) for subscriber in document.get("subscribers", [])
-        ],
+        subscribers=[RegistrySubscriber.from_document(subscriber) for subscriber in document.get("subscribers", [])],
         subscriber_count=document.get("subscriber_count", len(document.get("subscribers", []))),
         last_scraped_at=_as_utc(last_scraped_at) if last_scraped_at is not None else None,
         created_at=_as_utc(document["created_at"]),

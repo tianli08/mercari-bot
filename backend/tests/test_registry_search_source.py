@@ -21,8 +21,10 @@ os.environ.setdefault("DESIGNER_CHANNEL_ID", "123")
 os.environ.setdefault("SAVED_CHANNEL_ID", "456")
 
 from src import database, retrieve_utils  # noqa: E402
+from src.alert_fanout import ScrapeResult  # noqa: E402
 from src.constants import MERCARI_BASE_URL  # noqa: E402
 from src.discord_bot import MercariSendBot, ScrapeWorker  # noqa: E402
+from src.listings import ListingRecord  # noqa: E402
 
 pytestmark = pytest.mark.asyncio
 
@@ -46,12 +48,6 @@ class FakeDatabaseClient:
     async def ensure_indexes(self) -> None:
         """Create the same indexes as the production client."""
         await database.DatabaseClient.ensure_indexes(self)
-
-
-class FakeChannel:
-    """Minimal Discord channel stand-in for engine-path tests."""
-
-    id = 123
 
 
 @pytest.fixture
@@ -126,14 +122,13 @@ async def test_process_search_stamps_registry_progress_and_ignores_deleted_entri
         """Return zero listings after simulating a visited page."""
         return {}
 
-    async def fake_process_listing_alerts(*_args: object) -> None:
-        """Skip Discord delivery for engine-path tests."""
+    async def fake_fan_out_scrape_results(*_args: object) -> None:
+        """Skip delivery for engine-path tests."""
         return None
 
-    monkeypatch.setattr(cog, "get_channel_for_filter", lambda _filter_name: FakeChannel())
     monkeypatch.setattr(cog, "_ensure_worker_driver", fake_ensure_worker_driver)
     monkeypatch.setattr(cog, "_scrape_search_listings", fake_scrape_search_listings)
-    monkeypatch.setattr(cog, "_process_listing_alerts", fake_process_listing_alerts)
+    monkeypatch.setattr(cog, "_fan_out_scrape_results", fake_fan_out_scrape_results)
 
     await cog._process_search(worker, search)
 
@@ -144,6 +139,60 @@ async def test_process_search_stamps_registry_progress_and_ignores_deleted_entri
     await fake_database.keyword_registry.delete_one({"_id": "mercari:rick owens"})
 
     await cog._process_search(worker, search)
+
+
+async def test_process_search_persists_before_any_legacy_channel_resolution(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scrape persistence no longer depends on a legacy Discord channel being available."""
+    await database.subscribe_keyword("mercari", "rick owens", owner_id="owner-1", watchlist_id="watchlist-1")
+    search = (await retrieve_utils.registry_search_definitions())[0]
+    listing = ListingRecord(
+        marketplace="mercari",
+        item_id="m123",
+        canonical_id="mercari:m123",
+        url="https://jp.mercari.com/item/m123",
+        title="Listing m123",
+        image_url="https://example.com/image.jpg",
+        raw_content="Listing body JPY 1200",
+        price_text="JPY 1200",
+        price_value=1200,
+        currency="JPY",
+        status="active",
+        matched_filters={"rick owens"},
+        matched_keywords={"rick owens"},
+    )
+    cog = MercariSendBot(discord_bot=object())
+    worker = ScrapeWorker(worker_id=1)
+    fanout_results: list[ScrapeResult] = []
+
+    async def fake_ensure_worker_driver(worker: ScrapeWorker) -> object:
+        """Return a driver stand-in without opening Selenium."""
+        return object()
+
+    async def fake_scrape_search_listings(*_args: object) -> dict[str, ListingRecord]:
+        """Return one scraped listing."""
+        return {listing.canonical_id: listing}
+
+    async def fake_fan_out_scrape_results(scrape_results: list[ScrapeResult], *_args: object) -> None:
+        """Capture the post-persistence seam data."""
+        fanout_results.extend(scrape_results)
+
+    def fail_channel_resolution(_filter_name: str) -> None:
+        raise AssertionError("legacy channel resolution should happen only inside fan-out fallback")
+
+    monkeypatch.setattr(cog, "_ensure_worker_driver", fake_ensure_worker_driver)
+    monkeypatch.setattr(cog, "_scrape_search_listings", fake_scrape_search_listings)
+    monkeypatch.setattr(cog, "_fan_out_scrape_results", fake_fan_out_scrape_results)
+    monkeypatch.setattr(cog, "get_channel_for_filter", fail_channel_resolution)
+
+    await cog._process_search(worker, search)
+
+    listing_document = await fake_database.listings.find_one({"_id": listing.canonical_id})
+    assert listing_document is not None
+    assert len(fanout_results) == 1
+    assert fanout_results[0].is_new_listing is True
 
 
 async def test_registry_search_definitions_reflects_watchlist_changes_between_fetches(
