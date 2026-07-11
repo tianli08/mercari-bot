@@ -426,6 +426,7 @@ name = "mercari-bot"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "cryptography" },
     { name = "discord-py" },
     { name = "motor" },
@@ -446,6 +447,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.13.3" },
     { name = "cryptography", specifier = ">=49.0.0" },
     { name = "discord-py", specifier = ">=2.6.4" },
     { name = "motor", specifier = ">=3.7.1" },
