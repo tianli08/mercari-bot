@@ -16,7 +16,6 @@ from selenium.webdriver.chrome.options import Options
 
 from . import retrieve_utils, webdriver_utils
 from .alert_fanout import (
-    DiscordWebhookSender,
     LegacyDeliveryTarget,
     ScrapeResult,
     fan_out_listing_alerts,
@@ -32,6 +31,7 @@ from .keyword_registry import KeywordRegistryEntryNotFoundError
 from .listings import ListingRecord, SearchDefinition
 from .logging_utils import ContextLoggerAdapter, configure_logging, get_logger, log_exception
 from .rate_limiter import AsyncRateLimiter
+from .webhook_delivery import DiscordWebhookSender
 
 intents = discord.Intents.default()
 intents.message_content = True

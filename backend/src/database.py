@@ -682,18 +682,20 @@ async def mark_destination_verified(
     destination_id: str,
     verified_at: datetime | None = None,
 ) -> DestinationRecord:
-    """Set a destination's verification timestamp and return the updated record."""
+    """Set a destination's first verification timestamp and return its record."""
     await db_client.ensure_indexes()
 
     timestamp = datetime.now(UTC)
     verification_timestamp = _as_utc(verified_at) if verified_at is not None else timestamp
     document = await db_client.destinations.find_one_and_update(
-        {"_id": destination_id},
+        {"_id": destination_id, "verified_at": None},
         {"$set": {"verified_at": verification_timestamp, "updated_at": timestamp}},
         return_document=ReturnDocument.AFTER,
     )
     if document is None:
-        raise DestinationNotFoundError(destination_id)
+        document = await db_client.destinations.find_one({"_id": destination_id})
+        if document is None:
+            raise DestinationNotFoundError(destination_id)
     return _document_to_destination(document)
 
 

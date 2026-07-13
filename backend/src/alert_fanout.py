@@ -7,12 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-import aiohttp
-import discord
-
 from . import database
 from .destinations import DestinationRecord, DestinationType
-from .discord_messages import build_listing_embed
 from .keyword_registry import RegistrySubscriber
 from .listings import ListingRecord, Marketplace
 from .logging_utils import ContextLoggerAdapter, get_logger, log_exception
@@ -50,18 +46,6 @@ class _DeliveryRoute:
     owner_id: str
     watchlist: WatchlistRecord
     destination: DestinationRecord
-
-
-@dataclass(frozen=True, slots=True)
-class DiscordWebhookSender:
-    """Discord webhook transport backed by a shared aiohttp session."""
-
-    session: aiohttp.ClientSession
-
-    async def __call__(self, destination: DestinationRecord, listing: ListingRecord) -> None:
-        """Send the listing embed through the destination's Discord webhook."""
-        webhook = discord.Webhook.from_url(destination.webhook_url(), session=self.session)
-        await webhook.send(embed=build_listing_embed(listing))
 
 
 async def fan_out_listing_alerts(
