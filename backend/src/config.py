@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     selenium_page_load_timeout_seconds: float = 25.0
     selenium_script_timeout_seconds: float = 20.0
+    webhook_timeout_seconds: float = 10.0
+    webhook_max_attempts: int = 3
+    webhook_retry_backoff_seconds: float = 1.0
     driver_restart_after_searches: int = 150
     marketplace_db_name: str | None = None
     listings_collection_name: str | None = None
