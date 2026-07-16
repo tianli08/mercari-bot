@@ -14,7 +14,7 @@ from discord.ext import commands
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
-from . import retrieve_utils, webdriver_utils
+from . import database, retrieve_utils, webdriver_utils
 from .alert_fanout import (
     LegacyDeliveryTarget,
     ScrapeResult,
@@ -39,6 +39,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 scraper_logger = get_logger("scraper")
 dispatcher_logger = get_logger("dispatcher")
 discord_logger = get_logger("discord")
+DISPATCHER_RETRY_SECONDS = 60
+REGISTRY_CHANGE_LOG_LIMIT = 20
 
 
 def configured_filter_channels() -> dict[str, str]:
@@ -268,21 +270,17 @@ class MercariSendBot(commands.Cog):
         cycle_number = 0
         try:
             while True:
-                try:
-                    cycle_searches = await retrieve_utils.registry_search_definitions("mercari")
-                except Exception as exc:
-                    log_exception(
-                        dispatcher_logger,
-                        "Failed to load registry searches; dispatcher is sleeping before retry",
-                        exc,
-                    )
-                    await asyncio.sleep(60)
+                cycle_searches = await self._load_cycle_searches(cycle_number + 1)
+                if cycle_searches is None:
+                    await asyncio.sleep(DISPATCHER_RETRY_SECONDS)
                     continue
 
-                self.searches = cycle_searches
                 if not cycle_searches:
-                    dispatcher_logger.warning("No searches configured; dispatcher is sleeping", context={"sleep": 60})
-                    await asyncio.sleep(60)
+                    dispatcher_logger.warning(
+                        "No searches configured; dispatcher is sleeping",
+                        context={"sleep": DISPATCHER_RETRY_SECONDS},
+                    )
+                    await asyncio.sleep(DISPATCHER_RETRY_SECONDS)
                     continue
 
                 cycle_number += 1
@@ -319,6 +317,60 @@ class MercariSendBot(commands.Cog):
             dispatcher_logger.info("Dispatcher stopped")
             raise
 
+    async def _load_cycle_searches(self, cycle_number: int) -> list[SearchDefinition] | None:
+        """Load one registry snapshot, falling back only after a transient refresh failure."""
+        try:
+            cycle_searches = await retrieve_utils.registry_search_definitions("mercari")
+        except Exception as exc:
+            if self.searches:
+                log_exception(
+                    dispatcher_logger,
+                    "Registry refresh failed; reusing previous search set",
+                    exc,
+                    cycle=cycle_number,
+                    reused=len(self.searches),
+                )
+                return self.searches
+
+            log_exception(
+                dispatcher_logger,
+                "Failed to load registry searches; dispatcher is sleeping before retry",
+                exc,
+                cycle=cycle_number,
+                sleep=DISPATCHER_RETRY_SECONDS,
+            )
+            return None
+
+        self._log_registry_search_set_changes(self.searches, cycle_searches, cycle_number)
+        self.searches = cycle_searches
+        return cycle_searches
+
+    @staticmethod
+    def _log_registry_search_set_changes(
+        previous_searches: list[SearchDefinition],
+        cycle_searches: list[SearchDefinition],
+        cycle_number: int,
+    ) -> None:
+        """Log bounded keyword lists when the registry-backed search identities change."""
+        previous_identities = {(search.marketplace, search.keyword) for search in previous_searches}
+        cycle_identities = {(search.marketplace, search.keyword) for search in cycle_searches}
+        added_keywords = sorted(keyword for _, keyword in cycle_identities - previous_identities)
+        removed_keywords = sorted(keyword for _, keyword in previous_identities - cycle_identities)
+        if not added_keywords and not removed_keywords:
+            return
+
+        context: dict[str, object] = {
+            "cycle": cycle_number,
+            "added": added_keywords[:REGISTRY_CHANGE_LOG_LIMIT],
+            "removed": removed_keywords[:REGISTRY_CHANGE_LOG_LIMIT],
+            "total": len(cycle_identities),
+        }
+        if len(added_keywords) > REGISTRY_CHANGE_LOG_LIMIT:
+            context["added_omitted"] = len(added_keywords) - REGISTRY_CHANGE_LOG_LIMIT
+        if len(removed_keywords) > REGISTRY_CHANGE_LOG_LIMIT:
+            context["removed_omitted"] = len(removed_keywords) - REGISTRY_CHANGE_LOG_LIMIT
+        dispatcher_logger.info("Registry search set changed", context=context)
+
     async def _run_worker(self, worker: ScrapeWorker) -> None:
         """Consume searches from the shared queue until cancelled."""
         logger = worker_logger(worker.worker_id)
@@ -352,6 +404,9 @@ class MercariSendBot(commands.Cog):
     async def _process_search(self, worker: ScrapeWorker, search: SearchDefinition) -> None:
         """Scrape one search and process newly discovered listings."""
         logger = worker_logger(worker.worker_id)
+        if not await self._registry_search_is_active(search, logger):
+            return
+
         observed_at = datetime.now(UTC)
         driver = await self._ensure_worker_driver(worker)
         search_started_at = time.monotonic()
@@ -363,6 +418,33 @@ class MercariSendBot(commands.Cog):
         finally:
             await self._mark_registry_search_scraped(search, logger)
         self._log_search_finished(logger, search, aggregated_listings, search_started_at)
+
+    @staticmethod
+    async def _registry_search_is_active(
+        search: SearchDefinition,
+        logger: ContextLoggerAdapter,
+    ) -> bool:
+        """Return whether a queued search still has active registry subscribers."""
+        try:
+            registry_entry = await database.get_registry_entry(search.marketplace, search.keyword)
+        except Exception as exc:
+            log_exception(
+                logger,
+                "Failed to verify registry search is still active; proceeding with scrape",
+                exc,
+                marketplace=search.marketplace,
+                keyword=search.keyword,
+            )
+            return True
+
+        if registry_entry is not None and registry_entry.subscriber_count > 0 and registry_entry.subscribers:
+            return True
+
+        logger.info(
+            "Skipping search removed from registry mid-cycle",
+            context={"marketplace": search.marketplace, "keyword": search.keyword},
+        )
+        return False
 
     @staticmethod
     def _log_search_started(logger: ContextLoggerAdapter, search: SearchDefinition, queue_depth: int) -> None:

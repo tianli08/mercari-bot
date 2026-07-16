@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from datetime import UTC, datetime
@@ -20,11 +21,12 @@ os.environ.setdefault("DESIGNER_WEBHOOK", "https://discord.com/api/webhooks/123/
 os.environ.setdefault("DESIGNER_CHANNEL_ID", "123")
 os.environ.setdefault("SAVED_CHANNEL_ID", "456")
 
-from src import database, retrieve_utils  # noqa: E402
+from src import database, discord_bot, retrieve_utils  # noqa: E402
 from src.alert_fanout import ScrapeResult  # noqa: E402
+from src.config import settings  # noqa: E402
 from src.constants import MERCARI_BASE_URL  # noqa: E402
 from src.discord_bot import MercariSendBot, ScrapeWorker  # noqa: E402
-from src.listings import ListingRecord  # noqa: E402
+from src.listings import ListingRecord, SearchDefinition  # noqa: E402
 
 pytestmark = pytest.mark.asyncio
 
@@ -56,6 +58,23 @@ def fake_database(monkeypatch: pytest.MonkeyPatch) -> FakeDatabaseClient:
     fake_client = FakeDatabaseClient()
     monkeypatch.setattr(database, "db_client", fake_client)
     return fake_client
+
+
+async def _take_queued_searches(cog: MercariSendBot, count: int) -> list[SearchDefinition]:
+    """Take a known dispatcher cycle from the queue with a deadlock timeout."""
+    return [await asyncio.wait_for(cog.search_queue.get(), timeout=1) for _ in range(count)]
+
+
+async def _stop_dispatcher(
+    dispatcher_task: asyncio.Task[None],
+    cog: MercariSendBot,
+    pending_items: int,
+) -> None:
+    """Cancel a dispatcher test task and balance drained queue items."""
+    dispatcher_task.cancel()
+    for _ in range(pending_items):
+        cog.search_queue.task_done()
+    await asyncio.gather(dispatcher_task, return_exceptions=True)
 
 
 async def test_registry_search_definitions_maps_active_entries_in_urgency_order(
@@ -113,13 +132,19 @@ async def test_process_search_stamps_registry_progress_and_ignores_deleted_entri
     search = (await retrieve_utils.registry_search_definitions())[0]
     cog = MercariSendBot(discord_bot=object())
     worker = ScrapeWorker(worker_id=1)
+    driver_requests = 0
+    scrape_requests = 0
 
     async def fake_ensure_worker_driver(worker: ScrapeWorker) -> object:
         """Return a driver stand-in without opening Selenium."""
+        nonlocal driver_requests
+        driver_requests += 1
         return object()
 
     async def fake_scrape_search_listings(*_args: object) -> dict[str, object]:
         """Return zero listings after simulating a visited page."""
+        nonlocal scrape_requests
+        scrape_requests += 1
         return {}
 
     async def fake_fan_out_scrape_results(*_args: object) -> None:
@@ -135,10 +160,64 @@ async def test_process_search_stamps_registry_progress_and_ignores_deleted_entri
     stamped_entry = await database.get_registry_entry("mercari", "rick owens")
     assert stamped_entry is not None
     assert stamped_entry.last_scraped_at is not None
+    assert driver_requests == 1
+    assert scrape_requests == 1
 
     await fake_database.keyword_registry.delete_one({"_id": "mercari:rick owens"})
+    mark_requests = 0
+
+    async def fake_mark_keyword_scraped(_marketplace: str, _keyword: str) -> None:
+        """Record any attempt to stamp the removed queued search."""
+        nonlocal mark_requests
+        mark_requests += 1
+
+    monkeypatch.setattr(discord_bot, "mark_keyword_scraped", fake_mark_keyword_scraped)
 
     await cog._process_search(worker, search)
+
+    assert driver_requests == 1
+    assert scrape_requests == 1
+    assert mark_requests == 0
+    assert await database.get_registry_entry("mercari", "rick owens") is None
+
+
+async def test_process_search_registry_check_fails_open(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient pre-scrape registry read failure does not suppress the scrape."""
+    await database.subscribe_keyword("mercari", "julius", owner_id="owner-1", watchlist_id="watchlist-1")
+    search = (await retrieve_utils.registry_search_definitions())[0]
+    cog = MercariSendBot(discord_bot=object())
+    worker = ScrapeWorker(worker_id=1)
+    scrape_requests = 0
+
+    async def fail_registry_check(_marketplace: str, _keyword: str) -> None:
+        """Simulate a transient registry lookup failure."""
+        raise RuntimeError("registry unavailable")
+
+    async def fake_ensure_worker_driver(worker: ScrapeWorker) -> object:
+        """Return a driver stand-in without opening Selenium."""
+        return object()
+
+    async def fake_scrape_search_listings(*_args: object) -> dict[str, object]:
+        """Record that scraping proceeded after the failed guard lookup."""
+        nonlocal scrape_requests
+        scrape_requests += 1
+        return {}
+
+    async def fake_fan_out_scrape_results(*_args: object) -> None:
+        """Skip delivery for engine-path tests."""
+        return None
+
+    monkeypatch.setattr(database, "get_registry_entry", fail_registry_check)
+    monkeypatch.setattr(cog, "_ensure_worker_driver", fake_ensure_worker_driver)
+    monkeypatch.setattr(cog, "_scrape_search_listings", fake_scrape_search_listings)
+    monkeypatch.setattr(cog, "_fan_out_scrape_results", fake_fan_out_scrape_results)
+
+    await cog._process_search(worker, search)
+
+    assert scrape_requests == 1
 
 
 async def test_process_search_persists_before_any_legacy_channel_resolution(
@@ -211,3 +290,173 @@ async def test_registry_search_definitions_reflects_watchlist_changes_between_fe
     await database.update_watchlist(watchlist._id, keywords=["julius"])
 
     assert [search.keyword for search in await retrieve_utils.registry_search_definitions()] == ["julius"]
+
+
+async def test_dispatcher_picks_up_registry_additions_across_cycles(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The second dispatcher cycle enqueues keywords added after the first cycle."""
+    watchlist = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Designers",
+        keywords=["alpha"],
+        destination_id="destination-1",
+    )
+    monkeypatch.setattr(settings, "cycle_pause_seconds", 0.0)
+    change_logs: list[dict[str, object]] = []
+
+    def capture_dispatcher_info(message: str, *, context: dict[str, object] | None = None) -> None:
+        """Capture registry change logs while ignoring other dispatcher info messages."""
+        if message == "Registry search set changed":
+            change_logs.append(context or {})
+
+    monkeypatch.setattr(discord_bot.dispatcher_logger, "info", capture_dispatcher_info)
+    cog = MercariSendBot(discord_bot=object())
+    dispatcher_task = asyncio.create_task(cog._run_dispatcher())
+    pending_items = 0
+    try:
+        first_cycle = await _take_queued_searches(cog, 1)
+        pending_items = len(first_cycle)
+        assert [search.keyword for search in first_cycle] == ["alpha"]
+
+        await database.update_watchlist(watchlist._id, keywords=["alpha", "beta"])
+        for _ in range(pending_items):
+            cog.search_queue.task_done()
+        pending_items = 0
+
+        second_cycle = await _take_queued_searches(cog, 2)
+        pending_items = len(second_cycle)
+        assert {search.keyword for search in second_cycle} == {"alpha", "beta"}
+    finally:
+        await _stop_dispatcher(dispatcher_task, cog, pending_items)
+
+    assert change_logs == [
+        {"cycle": 1, "added": ["alpha"], "removed": [], "total": 1},
+        {"cycle": 2, "added": ["beta"], "removed": [], "total": 2},
+    ]
+
+
+async def test_dispatcher_drops_registry_removals_across_cycles(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The second dispatcher cycle omits keywords removed after the first cycle."""
+    watchlist = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Designers",
+        keywords=["alpha", "beta"],
+        destination_id="destination-1",
+    )
+    monkeypatch.setattr(settings, "cycle_pause_seconds", 0.0)
+    change_logs: list[dict[str, object]] = []
+
+    def capture_dispatcher_info(message: str, *, context: dict[str, object] | None = None) -> None:
+        """Capture registry change logs while ignoring other dispatcher info messages."""
+        if message == "Registry search set changed":
+            change_logs.append(context or {})
+
+    monkeypatch.setattr(discord_bot.dispatcher_logger, "info", capture_dispatcher_info)
+    cog = MercariSendBot(discord_bot=object())
+    dispatcher_task = asyncio.create_task(cog._run_dispatcher())
+    pending_items = 0
+    try:
+        first_cycle = await _take_queued_searches(cog, 2)
+        pending_items = len(first_cycle)
+        assert {search.keyword for search in first_cycle} == {"alpha", "beta"}
+
+        await database.update_watchlist(watchlist._id, keywords=["alpha"])
+        for _ in range(pending_items):
+            cog.search_queue.task_done()
+        pending_items = 0
+
+        second_cycle = await _take_queued_searches(cog, 1)
+        pending_items = len(second_cycle)
+        assert [search.keyword for search in second_cycle] == ["alpha"]
+    finally:
+        await _stop_dispatcher(dispatcher_task, cog, pending_items)
+
+    assert change_logs == [
+        {"cycle": 1, "added": ["alpha", "beta"], "removed": [], "total": 2},
+        {"cycle": 2, "added": [], "removed": ["beta"], "total": 1},
+    ]
+
+
+async def test_dispatcher_reuses_previous_searches_after_refresh_failure(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed second registry read reuses the first cycle without a retry stall."""
+    await database.create_watchlist(
+        owner_id="owner-1",
+        name="Designers",
+        keywords=["alpha"],
+        destination_id="destination-1",
+    )
+    monkeypatch.setattr(settings, "cycle_pause_seconds", 0.0)
+    original_registry_search_definitions = retrieve_utils.registry_search_definitions
+    refresh_count = 0
+    refresh_failures: list[tuple[str, BaseException, dict[str, object]]] = []
+
+    async def flaky_registry_search_definitions(marketplace: str = "mercari") -> list[SearchDefinition]:
+        """Return one registry snapshot and fail the next refresh."""
+        nonlocal refresh_count
+        refresh_count += 1
+        if refresh_count == 1:
+            return await original_registry_search_definitions(marketplace)
+        raise RuntimeError("registry unavailable")
+
+    def capture_log_exception(
+        _logger: object,
+        message: str,
+        exc: BaseException,
+        **context: object,
+    ) -> None:
+        """Capture dispatcher exception logs for fallback assertions."""
+        refresh_failures.append((message, exc, context))
+
+    monkeypatch.setattr(retrieve_utils, "registry_search_definitions", flaky_registry_search_definitions)
+    monkeypatch.setattr(discord_bot, "log_exception", capture_log_exception)
+    cog = MercariSendBot(discord_bot=object())
+    dispatcher_task = asyncio.create_task(cog._run_dispatcher())
+    pending_items = 0
+    try:
+        first_cycle = await _take_queued_searches(cog, 1)
+        pending_items = len(first_cycle)
+        assert [search.keyword for search in first_cycle] == ["alpha"]
+
+        for _ in range(pending_items):
+            cog.search_queue.task_done()
+        pending_items = 0
+
+        second_cycle = await _take_queued_searches(cog, 1)
+        pending_items = len(second_cycle)
+        assert [search.keyword for search in second_cycle] == ["alpha"]
+    finally:
+        await _stop_dispatcher(dispatcher_task, cog, pending_items)
+
+    assert refresh_count == 2
+    assert len(refresh_failures) == 1
+    message, exception, context = refresh_failures[0]
+    assert message == "Registry refresh failed; reusing previous search set"
+    assert isinstance(exception, RuntimeError)
+    assert context == {"cycle": 2, "reused": 1}
+
+
+async def test_successful_empty_refresh_replaces_previous_search_set(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """An intentionally emptied registry is not mistaken for a transient refresh failure."""
+    watchlist = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Designers",
+        keywords=["alpha"],
+        destination_id="destination-1",
+    )
+    cog = MercariSendBot(discord_bot=object())
+    cog.searches = await retrieve_utils.registry_search_definitions()
+
+    await database.update_watchlist(watchlist._id, keywords=[])
+
+    assert await cog._load_cycle_searches(2) == []
+    assert cog.searches == []
