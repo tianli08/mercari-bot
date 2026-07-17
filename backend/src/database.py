@@ -399,6 +399,7 @@ async def subscribe_keyword(
             "marketplace": marketplace,
             "keyword": normalized_keyword,
             "last_scraped_at": None,
+            "baselined_at": None,
             "created_at": timestamp,
         },
         "$addToSet": {"subscribers": subscriber_document},
@@ -547,6 +548,29 @@ async def mark_keyword_scraped(
     return _document_to_keyword_registry(document)
 
 
+async def mark_keyword_baselined(
+    marketplace: Marketplace,
+    keyword: str,
+    baselined_at: datetime | None = None,
+) -> KeywordRegistryRecord:
+    """Set a registry entry's first baseline timestamp and return its record."""
+    await db_client.ensure_indexes()
+
+    timestamp = datetime.now(UTC)
+    baseline_timestamp = _as_utc(baselined_at) if baselined_at is not None else timestamp
+    registry_id = build_registry_id(marketplace, keyword)
+    document = await db_client.keyword_registry.find_one_and_update(
+        {"_id": registry_id, "baselined_at": None},
+        {"$set": {"baselined_at": baseline_timestamp, "updated_at": timestamp}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if document is None:
+        document = await db_client.keyword_registry.find_one({"_id": registry_id})
+        if document is None:
+            raise KeywordRegistryEntryNotFoundError(registry_id)
+    return _document_to_keyword_registry(document)
+
+
 async def rebuild_keyword_registry(marketplace: Marketplace) -> int:
     """Rebuild one marketplace's registry projection from enabled watchlists."""
     await db_client.ensure_indexes()
@@ -576,6 +600,7 @@ async def rebuild_keyword_registry(marketplace: Marketplace) -> int:
                     "marketplace": marketplace,
                     "keyword": keyword,
                     "last_scraped_at": None,
+                    "baselined_at": None,
                     "created_at": timestamp,
                 },
                 "$set": {
@@ -881,6 +906,7 @@ def _document_to_destination(document: dict[str, Any]) -> DestinationRecord:
 
 def _document_to_keyword_registry(document: dict[str, Any]) -> KeywordRegistryRecord:
     last_scraped_at = document.get("last_scraped_at")
+    baselined_at = document.get("baselined_at")
     return KeywordRegistryRecord(
         _id=document["_id"],
         marketplace=document["marketplace"],
@@ -888,6 +914,7 @@ def _document_to_keyword_registry(document: dict[str, Any]) -> KeywordRegistryRe
         subscribers=[RegistrySubscriber.from_document(subscriber) for subscriber in document.get("subscribers", [])],
         subscriber_count=document.get("subscriber_count", len(document.get("subscribers", []))),
         last_scraped_at=_as_utc(last_scraped_at) if last_scraped_at is not None else None,
+        baselined_at=_as_utc(baselined_at) if baselined_at is not None else None,
         created_at=_as_utc(document["created_at"]),
         updated_at=_as_utc(document["updated_at"]),
     )

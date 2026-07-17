@@ -147,7 +147,7 @@ async def test_process_search_stamps_registry_progress_and_ignores_deleted_entri
         scrape_requests += 1
         return {}
 
-    async def fake_fan_out_scrape_results(*_args: object) -> None:
+    async def fake_fan_out_scrape_results(*_args: object, **_kwargs: object) -> None:
         """Skip delivery for engine-path tests."""
         return None
 
@@ -160,8 +160,18 @@ async def test_process_search_stamps_registry_progress_and_ignores_deleted_entri
     stamped_entry = await database.get_registry_entry("mercari", "rick owens")
     assert stamped_entry is not None
     assert stamped_entry.last_scraped_at is not None
+    assert stamped_entry.baselined_at is not None
     assert driver_requests == 1
     assert scrape_requests == 1
+
+    first_baselined_at = stamped_entry.baselined_at
+    await cog._process_search(worker, search)
+
+    restamped_entry = await database.get_registry_entry("mercari", "rick owens")
+    assert restamped_entry is not None
+    assert restamped_entry.baselined_at == first_baselined_at
+    assert driver_requests == 2
+    assert scrape_requests == 2
 
     await fake_database.keyword_registry.delete_one({"_id": "mercari:rick owens"})
     mark_requests = 0
@@ -175,8 +185,8 @@ async def test_process_search_stamps_registry_progress_and_ignores_deleted_entri
 
     await cog._process_search(worker, search)
 
-    assert driver_requests == 1
-    assert scrape_requests == 1
+    assert driver_requests == 2
+    assert scrape_requests == 2
     assert mark_requests == 0
     assert await database.get_registry_entry("mercari", "rick owens") is None
 
@@ -191,6 +201,7 @@ async def test_process_search_registry_check_fails_open(
     cog = MercariSendBot(discord_bot=object())
     worker = ScrapeWorker(worker_id=1)
     scrape_requests = 0
+    baseline_flags: list[bool] = []
 
     async def fail_registry_check(_marketplace: str, _keyword: str) -> None:
         """Simulate a transient registry lookup failure."""
@@ -206,9 +217,12 @@ async def test_process_search_registry_check_fails_open(
         scrape_requests += 1
         return {}
 
-    async def fake_fan_out_scrape_results(*_args: object) -> None:
-        """Skip delivery for engine-path tests."""
-        return None
+    async def fake_fan_out_scrape_results(
+        *_args: object,
+        is_baseline_scan: bool,
+    ) -> None:
+        """Capture that a failed registry read does not suppress alerts."""
+        baseline_flags.append(is_baseline_scan)
 
     monkeypatch.setattr(database, "get_registry_entry", fail_registry_check)
     monkeypatch.setattr(cog, "_ensure_worker_driver", fake_ensure_worker_driver)
@@ -218,6 +232,7 @@ async def test_process_search_registry_check_fails_open(
     await cog._process_search(worker, search)
 
     assert scrape_requests == 1
+    assert baseline_flags == [False]
 
 
 async def test_process_search_persists_before_any_legacy_channel_resolution(
@@ -254,7 +269,11 @@ async def test_process_search_persists_before_any_legacy_channel_resolution(
         """Return one scraped listing."""
         return {listing.canonical_id: listing}
 
-    async def fake_fan_out_scrape_results(scrape_results: list[ScrapeResult], *_args: object) -> None:
+    async def fake_fan_out_scrape_results(
+        scrape_results: list[ScrapeResult],
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
         """Capture the post-persistence seam data."""
         fanout_results.extend(scrape_results)
 
@@ -272,6 +291,70 @@ async def test_process_search_persists_before_any_legacy_channel_resolution(
     assert listing_document is not None
     assert len(fanout_results) == 1
     assert fanout_results[0].is_new_listing is True
+
+
+@pytest.mark.parametrize(
+    ("send_initial_items", "is_new_listing", "is_baseline_scan", "expected"),
+    [
+        (False, True, True, False),
+        (True, True, True, True),
+        (False, True, False, True),
+        (False, False, False, False),
+        (True, False, True, False),
+    ],
+)
+async def test_per_keyword_baseline_gate(
+    send_initial_items: bool,
+    is_new_listing: bool,
+    is_baseline_scan: bool,
+    expected: bool,
+) -> None:
+    """The listing gate combines global newness with the current keyword baseline phase."""
+    cog = MercariSendBot(discord_bot=object(), send_initial_items=send_initial_items)
+
+    assert (
+        cog._should_send_listing_message(
+            is_new_listing,
+            is_baseline_scan=is_baseline_scan,
+        )
+        is expected
+    )
+
+
+async def test_vanished_registry_entry_during_baseline_stamp_logs_and_does_not_raise(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A keyword removed during its scrape cannot break the worker's baseline completion path."""
+    await database.subscribe_keyword("mercari", "julius", owner_id="owner-1", watchlist_id="watchlist-1")
+    search = (await retrieve_utils.registry_search_definitions())[0]
+    info_logs: list[tuple[str, dict[str, object]]] = []
+
+    class RecordingLogger:
+        """Minimal logger that records structured info calls."""
+
+        def info(self, message: str, *, context: dict[str, object]) -> None:
+            """Record one structured info log."""
+            info_logs.append((message, context))
+
+    async def fail_baseline_stamp(_marketplace: str, _keyword: str) -> None:
+        """Simulate a registry entry disappearing between fan-out and baseline stamp."""
+        raise database.KeywordRegistryEntryNotFoundError("mercari:julius")
+
+    monkeypatch.setattr(discord_bot, "mark_keyword_baselined", fail_baseline_stamp)
+
+    await MercariSendBot._mark_registry_search_baselined(
+        search,
+        RecordingLogger(),
+        listings=0,
+    )
+
+    assert info_logs == [
+        (
+            "Registry entry disappeared before keyword baseline could be stamped",
+            {"marketplace": "mercari", "keyword": "julius"},
+        )
+    ]
 
 
 async def test_registry_search_definitions_reflects_watchlist_changes_between_fetches(

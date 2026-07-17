@@ -49,6 +49,7 @@ class KeywordRegistryRecord:
     subscribers: list[RegistrySubscriber]
     subscriber_count: int
     last_scraped_at: datetime | None
+    baselined_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -60,6 +61,7 @@ class KeywordRegistryRecord:
         keyword: str,
         subscribers: list[RegistrySubscriber] | None = None,
         last_scraped_at: datetime | None = None,
+        baselined_at: datetime | None = None,
         created_at: datetime | None = None,
     ) -> "KeywordRegistryRecord":
         """Create a new registry entry with normalized fields and timestamps."""
@@ -73,6 +75,7 @@ class KeywordRegistryRecord:
             subscribers=normalized_subscribers,
             subscriber_count=len(normalized_subscribers),
             last_scraped_at=last_scraped_at,
+            baselined_at=baselined_at,
             created_at=timestamp,
             updated_at=timestamp,
         )
@@ -92,6 +95,7 @@ class KeywordRegistryRecord:
             "subscribers": subscribers,
             "subscriber_count": len(subscribers),
             "last_scraped_at": self.last_scraped_at,
+            "baselined_at": self.baselined_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

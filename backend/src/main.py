@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
         dest="send_initial_items",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Override SEND_INITIAL_ITEMS: post items discovered during the first scan.",
+        help="Override SEND_INITIAL_ITEMS: post items discovered during per-keyword baseline scans.",
     )
     return parser.parse_args()
 
