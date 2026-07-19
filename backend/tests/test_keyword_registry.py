@@ -64,6 +64,7 @@ async def test_subscribing_same_watchlist_is_idempotent(fake_database: FakeDatab
     )
 
     assert entry.subscriber_count == 1
+    assert entry.baselined_at is None
     assert [subscriber.watchlist_id for subscriber in entry.subscribers] == ["watchlist-1"]
 
 
@@ -94,6 +95,24 @@ async def test_unsubscribing_last_subscriber_deletes_entry(fake_database: FakeDa
     await database.unsubscribe_keyword("mercari", "julius", owner_id="owner-1", watchlist_id="missing")
 
     assert await database.get_registry_entry("mercari", "julius") is None
+
+
+async def test_resubscribing_after_deletion_creates_fresh_unbaselined_entry(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """A registry entry deleted at zero subscribers gets a fresh baseline state when re-added."""
+    await database.subscribe_keyword("mercari", "julius", owner_id="owner-1", watchlist_id="watchlist-1")
+    await database.mark_keyword_baselined("mercari", "julius")
+
+    await database.unsubscribe_keyword("mercari", "julius", owner_id="owner-1", watchlist_id="watchlist-1")
+    entry = await database.subscribe_keyword(
+        "mercari",
+        "julius",
+        owner_id="owner-1",
+        watchlist_id="watchlist-1",
+    )
+
+    assert entry.baselined_at is None
 
 
 async def test_update_watchlist_keyword_edit_syncs_registry(fake_database: FakeDatabaseClient) -> None:
@@ -174,6 +193,55 @@ async def test_list_active_registry_entries_orders_and_filters_stale_entries(
     assert [entry.keyword for entry in stale_entries] == ["never", "old"]
 
 
+async def test_mark_keyword_baselined_sets_stable_timestamp_and_updated_at(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """The first baseline timestamp is persisted and later stamp attempts leave it unchanged."""
+    await database.subscribe_keyword(
+        "mercari",
+        "rick owens",
+        owner_id="owner-1",
+        watchlist_id="watchlist-1",
+    )
+    old_updated_at = datetime(2024, 1, 1, tzinfo=UTC)
+    await fake_database.keyword_registry.update_one(
+        {"_id": "mercari:rick owens"},
+        {"$set": {"updated_at": old_updated_at}},
+    )
+    first_baseline = datetime(2025, 1, 1, tzinfo=UTC)
+    second_baseline = datetime(2025, 1, 2, tzinfo=UTC)
+
+    marked_entry = await database.mark_keyword_baselined("mercari", "rick owens", first_baseline)
+    repeated_entry = await database.mark_keyword_baselined("mercari", "rick owens", second_baseline)
+
+    assert marked_entry.baselined_at == first_baseline
+    assert marked_entry.updated_at > old_updated_at
+    assert repeated_entry.baselined_at == first_baseline
+    assert repeated_entry.updated_at == marked_entry.updated_at
+
+
+async def test_mark_keyword_baselined_raises_for_missing_entry(fake_database: FakeDatabaseClient) -> None:
+    """Baseline stamping distinguishes a missing entry from an already-stamped entry."""
+    with pytest.raises(database.KeywordRegistryEntryNotFoundError):
+        await database.mark_keyword_baselined("mercari", "missing")
+
+
+async def test_registry_document_without_baseline_field_hydrates_as_unbaselined(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """Legacy registry documents without the new field remain readable."""
+    await database.subscribe_keyword("mercari", "legacy", owner_id="owner-1", watchlist_id="watchlist-1")
+    await fake_database.keyword_registry.update_one(
+        {"_id": "mercari:legacy"},
+        {"$unset": {"baselined_at": ""}},
+    )
+
+    entry = await database.get_registry_entry("mercari", "legacy")
+
+    assert entry is not None
+    assert entry.baselined_at is None
+
+
 async def test_rebuild_keyword_registry_reconciles_projection(fake_database: FakeDatabaseClient) -> None:
     """Rebuilding restores desired entries, removes orphans, and preserves scrape history."""
     first_watchlist = await database.create_watchlist(
@@ -192,7 +260,9 @@ async def test_rebuild_keyword_registry_reconciles_projection(fake_database: Fak
     await fake_database.keyword_registry.delete_many({})
     assert await database.rebuild_keyword_registry("mercari") == 2
     scraped_at = datetime(2025, 1, 1, tzinfo=UTC)
+    baselined_at = datetime(2025, 1, 2, tzinfo=UTC)
     await database.mark_keyword_scraped("mercari", "rick owens", scraped_at)
+    await database.mark_keyword_baselined("mercari", "rick owens", baselined_at)
     await database.subscribe_keyword("mercari", "orphan", owner_id="owner-3", watchlist_id="watchlist-3")
     await fake_database.keyword_registry.update_one(
         {"_id": "mercari:rick owens"},
@@ -216,6 +286,8 @@ async def test_rebuild_keyword_registry_reconciles_projection(fake_database: Fak
         second_watchlist._id,
     }
     assert rick_entry.last_scraped_at == scraped_at
+    assert rick_entry.baselined_at == baselined_at
+    assert julius_entry.baselined_at is None
     assert await database.get_registry_entry("mercari", "orphan") is None
 
 

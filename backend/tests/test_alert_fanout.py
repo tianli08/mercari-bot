@@ -370,10 +370,10 @@ async def test_legacy_fallback_only_runs_for_zero_subscribers_when_enabled(
     assert legacy_sent == [listing.canonical_id]
 
 
-async def test_initial_scan_gate_suppresses_and_send_initial_override_delivers(
+async def test_keyword_baseline_gate_suppresses_first_pass_then_delivers(
     fake_database: FakeDatabaseClient,
 ) -> None:
-    """The existing initial-scan/newness gate is honored by fan-out."""
+    """A keyword baseline pass writes no delivery before a later pass alerts."""
     destination = await create_destination("owner-1", "main")
     await database.create_watchlist(
         owner_id="owner-1",
@@ -384,10 +384,22 @@ async def test_initial_scan_gate_suppresses_and_send_initial_override_delivers(
     listing = build_listing("m-gated")
     sender = RecordingDestinationSender()
 
-    await run_fanout(listing, sender, should_send_listing=lambda _is_new: False)
+    def should_alert(is_new_listing: bool, *, is_baseline_scan: bool) -> bool:
+        """Apply the per-keyword baseline gate used by the worker."""
+        return is_new_listing and not is_baseline_scan
+
+    await run_fanout(
+        listing,
+        sender,
+        should_send_listing=lambda is_new: should_alert(is_new, is_baseline_scan=True),
+    )
     assert sender.sent == []
     assert await fake_database.alerts.count_documents({}) == 0
 
-    await run_fanout(listing, sender, should_send_listing=lambda _is_new: True)
+    await run_fanout(
+        listing,
+        sender,
+        should_send_listing=lambda is_new: should_alert(is_new, is_baseline_scan=False),
+    )
     assert sender.sent == [(destination._id, listing.canonical_id)]
     assert await fake_database.alerts.count_documents({}) == 1

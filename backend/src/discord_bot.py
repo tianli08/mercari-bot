@@ -23,11 +23,12 @@ from .alert_fanout import (
 from .browser_profile import BrowserProfile
 from .config import get_legacy_app_config, settings
 from .database import (
+    mark_keyword_baselined,
     mark_keyword_scraped,
     upsert_listing,
 )
 from .discord_messages import send_listing_message as send_discord_listing_message
-from .keyword_registry import KeywordRegistryEntryNotFoundError
+from .keyword_registry import KeywordRegistryEntryNotFoundError, KeywordRegistryRecord
 from .listings import ListingRecord, SearchDefinition
 from .logging_utils import ContextLoggerAdapter, configure_logging, get_logger, log_exception
 from .rate_limiter import AsyncRateLimiter
@@ -102,7 +103,6 @@ class MercariSendBot(commands.Cog):
         """Initialize shared scraper state."""
         self.bot = discord_bot
         self.send_initial_items = send_initial_items
-        self.is_initial_scan = True
         self.searches: list[SearchDefinition] = []
         self.search_queue: asyncio.Queue[SearchDefinition] = asyncio.Queue()
         self.rate_limiter = AsyncRateLimiter(settings.max_requests_per_minute)
@@ -300,10 +300,6 @@ class MercariSendBot(commands.Cog):
                 await self.search_queue.join()
 
                 cycle_seconds = time.monotonic() - cycle_started_at
-                if self.is_initial_scan:
-                    self.is_initial_scan = False
-                    dispatcher_logger.info("Initial scan complete; future new listings will be alerted")
-
                 dispatcher_logger.info(
                     "Scrape cycle completed",
                     context={
@@ -404,9 +400,13 @@ class MercariSendBot(commands.Cog):
     async def _process_search(self, worker: ScrapeWorker, search: SearchDefinition) -> None:
         """Scrape one search and process newly discovered listings."""
         logger = worker_logger(worker.worker_id)
-        if not await self._registry_search_is_active(search, logger):
+        is_active, registry_entry = await self._load_active_registry_entry(search, logger)
+        if not is_active:
             return
 
+        # Removing the last subscriber deletes the entry, so re-subscribing intentionally
+        # creates a fresh document and gets one new silent baseline pass.
+        is_baseline_scan = registry_entry is not None and registry_entry.baselined_at is None
         observed_at = datetime.now(UTC)
         driver = await self._ensure_worker_driver(worker)
         search_started_at = time.monotonic()
@@ -414,17 +414,25 @@ class MercariSendBot(commands.Cog):
         aggregated_listings = await self._scrape_search_listings(worker, driver, search, logger)
         try:
             scrape_results = await self._persist_scrape_results(aggregated_listings, observed_at, search, logger)
-            await self._fan_out_scrape_results(scrape_results, observed_at, search, logger)
+            await self._fan_out_scrape_results(
+                scrape_results,
+                observed_at,
+                search,
+                logger,
+                is_baseline_scan=is_baseline_scan,
+            )
+            if is_baseline_scan:
+                await self._mark_registry_search_baselined(search, logger, listings=len(aggregated_listings))
         finally:
             await self._mark_registry_search_scraped(search, logger)
         self._log_search_finished(logger, search, aggregated_listings, search_started_at)
 
     @staticmethod
-    async def _registry_search_is_active(
+    async def _load_active_registry_entry(
         search: SearchDefinition,
         logger: ContextLoggerAdapter,
-    ) -> bool:
-        """Return whether a queued search still has active registry subscribers."""
+    ) -> tuple[bool, KeywordRegistryRecord | None]:
+        """Load an active registry entry, failing open when the read is unavailable."""
         try:
             registry_entry = await database.get_registry_entry(search.marketplace, search.keyword)
         except Exception as exc:
@@ -435,16 +443,16 @@ class MercariSendBot(commands.Cog):
                 marketplace=search.marketplace,
                 keyword=search.keyword,
             )
-            return True
+            return True, None
 
         if registry_entry is not None and registry_entry.subscriber_count > 0 and registry_entry.subscribers:
-            return True
+            return True, registry_entry
 
         logger.info(
             "Skipping search removed from registry mid-cycle",
             context={"marketplace": search.marketplace, "keyword": search.keyword},
         )
-        return False
+        return False, registry_entry
 
     @staticmethod
     def _log_search_started(logger: ContextLoggerAdapter, search: SearchDefinition, queue_depth: int) -> None:
@@ -519,6 +527,8 @@ class MercariSendBot(commands.Cog):
         observed_at: datetime,
         search: SearchDefinition,
         logger: ContextLoggerAdapter,
+        *,
+        is_baseline_scan: bool,
     ) -> None:
         """Deliver persisted scrape results through tenant fan-out."""
         try:
@@ -526,7 +536,10 @@ class MercariSendBot(commands.Cog):
                 marketplace=search.marketplace,
                 keyword=search.keyword,
                 scrape_results=scrape_results,
-                should_send_listing=self._should_send_listing_message,
+                should_send_listing=lambda is_new: self._should_send_listing_message(
+                    is_new,
+                    is_baseline_scan=is_baseline_scan,
+                ),
                 observed_at=observed_at,
                 destination_sender=DiscordWebhookSender(await self._ensure_webhook_session()),
                 legacy_alerts_enabled=settings.legacy_channel_alerts_enabled,
@@ -541,6 +554,39 @@ class MercariSendBot(commands.Cog):
                 marketplace=search.marketplace,
                 filter=search.filter_name,
                 keyword=search.keyword,
+            )
+
+    @staticmethod
+    async def _mark_registry_search_baselined(
+        search: SearchDefinition,
+        logger: ContextLoggerAdapter,
+        *,
+        listings: int,
+    ) -> None:
+        """Stamp a completed keyword baseline without disturbing worker execution."""
+        try:
+            await mark_keyword_baselined(search.marketplace, search.keyword)
+        except KeywordRegistryEntryNotFoundError:
+            logger.info(
+                "Registry entry disappeared before keyword baseline could be stamped",
+                context={"marketplace": search.marketplace, "keyword": search.keyword},
+            )
+        except Exception as exc:
+            log_exception(
+                logger,
+                "Failed to stamp keyword baseline",
+                exc,
+                marketplace=search.marketplace,
+                keyword=search.keyword,
+            )
+        else:
+            logger.info(
+                "Keyword baseline scan complete; future new listings will be alerted",
+                context={
+                    "marketplace": search.marketplace,
+                    "keyword": search.keyword,
+                    "listings": listings,
+                },
             )
 
     async def _ensure_webhook_session(self) -> aiohttp.ClientSession:
@@ -588,9 +634,9 @@ class MercariSendBot(commands.Cog):
                 keyword=search.keyword,
             )
 
-    def _should_send_listing_message(self, is_new_listing: bool) -> bool:
-        """Return whether a new listing should be sent for the current scan phase."""
-        return is_new_listing and (self.send_initial_items or not self.is_initial_scan)
+    def _should_send_listing_message(self, is_new_listing: bool, *, is_baseline_scan: bool) -> bool:
+        """Return whether a new listing should be alerted for this keyword's scan phase."""
+        return is_new_listing and (self.send_initial_items or not is_baseline_scan)
 
     @staticmethod
     def _log_search_finished(
