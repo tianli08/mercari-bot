@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     webhook_max_attempts: int = 3
     webhook_retry_backoff_seconds: float = 1.0
     driver_restart_after_searches: int = 150
+    api_host: str = "127.0.0.1"
+    api_port: int = 8000
+    api_cors_origins: list[str] = ["http://localhost:3000"]
     marketplace_db_name: str | None = None
     listings_collection_name: str | None = None
     alerts_collection_name: str | None = None

@@ -9,3 +9,11 @@ This system moves beyond basic keyword matching by utilizing a custom machine le
 * **Real-Time Discord Integration:** Instantaneous webhook delivery of targeted listings directly to user-selected servers and channels.
 * **SaaS Dashboard:** A scalable web interface for users to authenticate, manage complex keyword matrices, adjust ML confidence thresholds, and configure brand-specific drop-down parameters.
 * **Distributed Architecture:** Asynchronous task processing utilizing Celery and Redis to handle concurrent scraping tasks and ML inference without blocking API operations.
+
+## Running the backend services
+
+Run commands from `backend/`. The worker and API are separate processes that share MongoDB:
+
+- Worker: `uv run python -m src.main`
+- API (development): `uv run uvicorn src.api.app:app --reload`
+- API (settings-based host and port): `uv run python -m src.api_main`
