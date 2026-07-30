@@ -1,7 +1,7 @@
 # Architecture (Source of Truth)
 
 > This document supersedes the design sections of `PROJECT.md` for all SaaS work.
-> Last updated: Phase 0.
+> Last updated: Phase 3.
 
 ## Product model
 - **Centralized, hosted SaaS.** We run all scraping and delivery infrastructure.
@@ -26,7 +26,8 @@
 ## Runtime topology (target)
 - `backend/` Python service, two logical roles sharing one Mongo database:
   1. **Scraper/delivery worker** - the refactored bot engine.
-  2. **API** - FastAPI, serves the frontend.
+  2. **API** - FastAPI skeleton in `src/api/`, served by the uvicorn entrypoint with
+     all application routes under `/api/v1`.
   (At this scale these may run as two processes on one host.)
 - `web/` Next.js + Tailwind frontend (landing page + authenticated dashboard).
 - `infra/` Docker + deploy configuration.
