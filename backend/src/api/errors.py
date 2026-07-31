@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from ..destinations import DestinationLabelExistsError, DestinationNotFoundError, InvalidWebhookUrlError
@@ -12,6 +13,7 @@ from ..logging_utils import get_logger
 from ..presets import PresetNotFoundError
 from ..users import EmailAlreadyExistsError
 from ..watchlists import WatchlistNameExistsError, WatchlistNotFoundError
+from .auth.exceptions import AuthenticationRequiredError, InvalidCredentialsError
 from .schemas import ErrorResponse
 
 _logger = get_logger("api")
@@ -47,6 +49,18 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(
         InvalidWebhookUrlError,
         _build_error_handler(422, "Invalid webhook URL", "invalid_webhook_url"),
+    )
+    app.add_exception_handler(
+        InvalidCredentialsError,
+        _build_error_handler(401, "Invalid email or password", "invalid_credentials"),
+    )
+    app.add_exception_handler(
+        AuthenticationRequiredError,
+        _build_error_handler(401, "Authentication required", "authentication_required"),
+    )
+    app.add_exception_handler(
+        RequestValidationError,
+        _build_error_handler(422, "Invalid request", "validation_error"),
     )
     app.add_exception_handler(
         ValueError,
