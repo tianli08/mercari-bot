@@ -3,9 +3,9 @@
 import functools
 import glob
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,7 +41,12 @@ class Settings(BaseSettings):
         ".env.local",
         "channel_id.env",
     ]
-    model_config = SettingsConfigDict(env_nested_delimiter="__", env_file=env_files, extra="allow")
+    model_config = SettingsConfigDict(
+        env_nested_delimiter="__",
+        env_file=env_files,
+        extra="allow",
+        hide_input_in_errors=True,
+    )
 
     mongo_uri: SecretStr
     discord_key: SecretStr
@@ -89,6 +94,15 @@ class Settings(BaseSettings):
     api_host: str = "127.0.0.1"
     api_port: int = 8000
     api_cors_origins: list[str] = ["http://localhost:3000"]
+    api_environment: Literal["development", "test", "production"] = "development"
+    jwt_secret: SecretStr = Field(min_length=32)
+    jwt_algorithm: Literal["HS256"] = "HS256"
+    jwt_token_lifetime_seconds: int = Field(default=3600, ge=60, le=86400)
+    jwt_issuer: str = Field(default="mercari-bot-api", min_length=1, max_length=128)
+    jwt_audience: str = Field(default="mercari-bot-dashboard", min_length=1, max_length=128)
+    auth_cookie_name: str = Field(default="mercari_session", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     marketplace_db_name: str | None = None
     listings_collection_name: str | None = None
     alerts_collection_name: str | None = None
@@ -99,6 +113,17 @@ class Settings(BaseSettings):
     preset_keywords_collection_name: str | None = None
     mercari_db_name: str | None = None
     mercari_collection_name: str | None = None
+
+    @model_validator(mode="after")
+    def validate_authentication_settings(self) -> "Settings":
+        """Reject authentication settings that would make session cookies unsafe."""
+        if "*" in self.api_cors_origins:
+            raise ValueError("API_CORS_ORIGINS cannot use a wildcard when credentials are enabled")
+        if self.api_environment == "production" and not self.auth_cookie_secure:
+            raise ValueError("AUTH_COOKIE_SECURE must be enabled in production")
+        if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure:
+            raise ValueError("SameSite=None authentication cookies must be Secure")
+        return self
 
     @property
     def mongo_database_name(self) -> str:

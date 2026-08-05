@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .. import database
 from ..config import settings
+from .auth.middleware import AuthenticationMiddleware
 from .errors import register_exception_handlers
 from .routers import router as api_router
 
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(AuthenticationMiddleware)
     application.include_router(api_router, prefix=API_PREFIX)
     register_exception_handlers(application)
     return application
