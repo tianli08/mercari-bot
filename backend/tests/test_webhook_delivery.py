@@ -27,7 +27,9 @@ from src import database  # noqa: E402
 from src.destinations import DestinationRecord  # noqa: E402
 from src.listings import ListingRecord  # noqa: E402
 from src.webhook_delivery import (  # noqa: E402
+    WEBHOOK_VERIFICATION_MESSAGE,
     DiscordWebhookSender,
+    DiscordWebhookVerifier,
     WebhookPermanentError,
     WebhookTransientError,
 )
@@ -162,6 +164,27 @@ async def test_success_posts_embed_only_and_stamps_destination(skip_verification
     assert "view" not in request["json"]
     assert "components" not in request["json"]
     skip_verification_stamp.assert_awaited_once()
+
+
+async def test_verification_posts_fixed_message_and_uses_owner_scoped_stamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit verification sends no listing data and stamps through the tenant boundary."""
+    session = _StubSession([_StubResponse(204)])
+    destination = build_destination()
+    stamp = AsyncMock(return_value=destination)
+    monkeypatch.setattr(database, "mark_destination_verified_for_owner", stamp)
+
+    result = await DiscordWebhookVerifier(session)(destination, "owner-1")
+
+    assert result is destination
+    assert len(session.requests) == 1
+    target_url, request = session.requests[0]
+    assert target_url == WEBHOOK_URL
+    assert request["json"] == {"content": WEBHOOK_VERIFICATION_MESSAGE}
+    assert request["allow_redirects"] is False
+    stamp.assert_awaited_once()
+    assert stamp.await_args.args[:2] == (destination._id, "owner-1")
 
 
 async def test_rate_limit_retries_after_json_delay_then_succeeds(skip_verification_stamp: AsyncMock) -> None:

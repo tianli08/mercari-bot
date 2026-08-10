@@ -47,3 +47,26 @@ Set these environment variables before importing or starting the backend:
 
 Password inputs must be 12–128 characters. The API stores only Argon2id hashes
 and never returns password hashes or raw session tokens.
+
+### Tenant resource API
+
+Authenticated clients can manage watchlists and Discord destinations under
+`/api/v1`. Tenant identity always comes from the signed session cookie; request
+bodies do not accept owner or tenant fields, and missing and foreign-owned IDs
+both return `404`.
+
+- Watchlists: `POST/GET /watchlists`, `GET/PATCH/DELETE /watchlists/{id}`
+- Keywords: `POST/DELETE /watchlists/{id}/keywords` and
+  `POST /watchlists/{id}/keywords/from-preset`
+- Monitoring: `PATCH /watchlists/{id}/monitoring`
+- Presets: `GET /presets` (enabled catalog entries only)
+- Destinations: `POST/GET /destinations`,
+  `GET/PATCH/DELETE /destinations/{id}`, and
+  `POST /destinations/{id}/verify`
+- Recent alerts: `GET /alerts/recent?limit=20&cursor=...`
+
+Destination responses contain labels, timestamps, type, and verification
+state only. Discord webhook URLs are encrypted at rest and are never returned,
+including in masked form. The recent-alert feed contains sent alerts only,
+sorts newest first by creation time and ID, and uses an opaque cursor with a
+maximum page size of 100.

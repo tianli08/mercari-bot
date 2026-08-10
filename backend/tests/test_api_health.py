@@ -99,6 +99,89 @@ async def test_app_factory_does_not_import_engine_modules(fake_database: FakeDat
     assert not _ENGINE_MODULES_AFTER_API_IMPORT
 
 
+async def test_openapi_documents_resource_routes_without_ownership_or_secrets(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """The public contract exposes every CRUD route and only allowlisted fields."""
+    schema = create_app().openapi()
+    expected_paths = {
+        "/api/v1/watchlists",
+        "/api/v1/watchlists/{watchlist_id}",
+        "/api/v1/watchlists/{watchlist_id}/keywords",
+        "/api/v1/watchlists/{watchlist_id}/keywords/from-preset",
+        "/api/v1/watchlists/{watchlist_id}/monitoring",
+        "/api/v1/presets",
+        "/api/v1/destinations",
+        "/api/v1/destinations/{destination_id}",
+        "/api/v1/destinations/{destination_id}/verify",
+        "/api/v1/alerts/recent",
+    }
+    assert expected_paths <= schema["paths"].keys()
+
+    components = schema["components"]["schemas"]
+    for model_name in [
+        "WatchlistCreateRequest",
+        "WatchlistUpdateRequest",
+        "DestinationCreateRequest",
+        "DestinationUpdateRequest",
+    ]:
+        assert components[model_name]["additionalProperties"] is False
+        assert not {"owner_id", "tenant_id", "user_id"}.intersection(components[model_name]["properties"])
+    assert set(components["PublicDestination"]["properties"]) == {
+        "id",
+        "type",
+        "label",
+        "verified_at",
+        "created_at",
+        "updated_at",
+    }
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("POST", "/api/v1/watchlists", {"name": "W", "destination_id": "destination"}),
+        ("GET", "/api/v1/watchlists", None),
+        ("GET", "/api/v1/watchlists/watchlist", None),
+        ("PATCH", "/api/v1/watchlists/watchlist", {"name": "W"}),
+        ("DELETE", "/api/v1/watchlists/watchlist", None),
+        ("POST", "/api/v1/watchlists/watchlist/keywords", {"keyword": "keyword"}),
+        ("DELETE", "/api/v1/watchlists/watchlist/keywords", {"keyword": "keyword"}),
+        (
+            "POST",
+            "/api/v1/watchlists/watchlist/keywords/from-preset",
+            {"preset_id": "preset"},
+        ),
+        ("PATCH", "/api/v1/watchlists/watchlist/monitoring", {"enabled": True}),
+        ("GET", "/api/v1/presets", None),
+        (
+            "POST",
+            "/api/v1/destinations",
+            {"label": "D", "webhook_url": "https://discord.com/api/webhooks/123/token"},
+        ),
+        ("GET", "/api/v1/destinations", None),
+        ("GET", "/api/v1/destinations/destination", None),
+        ("PATCH", "/api/v1/destinations/destination", {"label": "D"}),
+        ("DELETE", "/api/v1/destinations/destination", None),
+        ("POST", "/api/v1/destinations/destination/verify", None),
+        ("GET", "/api/v1/alerts/recent", None),
+    ],
+)
+async def test_resource_routes_require_authentication(
+    fake_database: FakeDatabaseClient,
+    method: str,
+    path: str,
+    payload: dict[str, object] | None,
+) -> None:
+    """Every Step 3.3 resource operation rejects an unauthenticated caller."""
+    application = create_app()
+    async with _client_for(application) as client:
+        response = await client.request(method, path, json=payload)
+
+    assert response.status_code == 401
+    assert response.json()["code"] == "authentication_required"
+
+
 async def test_lifespan_initializes_indexes_and_closes_database(
     fake_database: FakeDatabaseClient,
     monkeypatch: pytest.MonkeyPatch,
