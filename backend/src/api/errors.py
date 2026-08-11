@@ -8,11 +8,17 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from ..destinations import DestinationLabelExistsError, DestinationNotFoundError, InvalidWebhookUrlError
+from ..destinations import (
+    DestinationInUseError,
+    DestinationLabelExistsError,
+    DestinationNotFoundError,
+    InvalidWebhookUrlError,
+)
 from ..logging_utils import get_logger
 from ..presets import PresetNotFoundError
 from ..users import EmailAlreadyExistsError
 from ..watchlists import WatchlistNameExistsError, WatchlistNotFoundError
+from ..webhook_errors import WebhookDeliveryError, WebhookPermanentError, WebhookTransientError
 from .auth.exceptions import AuthenticationRequiredError, InvalidCredentialsError
 from .schemas import ErrorResponse
 
@@ -49,6 +55,22 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(
         InvalidWebhookUrlError,
         _build_error_handler(422, "Invalid webhook URL", "invalid_webhook_url"),
+    )
+    app.add_exception_handler(
+        DestinationInUseError,
+        _build_error_handler(409, "Destination is used by a watchlist", "destination_in_use"),
+    )
+    app.add_exception_handler(
+        WebhookPermanentError,
+        _build_error_handler(422, "Webhook was rejected", "webhook_rejected"),
+    )
+    app.add_exception_handler(
+        WebhookTransientError,
+        _build_error_handler(503, "Webhook service is temporarily unavailable", "webhook_unavailable"),
+    )
+    app.add_exception_handler(
+        WebhookDeliveryError,
+        _build_error_handler(502, "Webhook verification failed", "webhook_verification_failed"),
     )
     app.add_exception_handler(
         InvalidCredentialsError,

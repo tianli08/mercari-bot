@@ -10,9 +10,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import motor.motor_asyncio
-from pymongo import ASCENDING, ReturnDocument
+from pymongo import ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
+from .alert_deliveries import AlertDeliveryRecord
 from .config import settings
 from .destinations import (
     DestinationLabelExistsError,
@@ -92,6 +93,15 @@ class DatabaseClient:
         )
         await self.alerts.create_index("owner_id", name="alerts_owner_idx")
         await self.alerts.create_index("status", name="alert_status_idx")
+        await self.alerts.create_index(
+            [
+                ("owner_id", ASCENDING),
+                ("status", ASCENDING),
+                ("created_at", DESCENDING),
+                ("_id", DESCENDING),
+            ],
+            name="alerts_owner_status_created_id_idx",
+        )
         await self.users.create_index("email", unique=True, name="users_email_unique")
         await self.users.create_index("status", name="users_status_idx")
         await self.watchlists.create_index("owner_id", name="watchlists_owner_idx")
@@ -101,6 +111,10 @@ class DatabaseClient:
             name="watchlists_owner_name_unique",
         )
         await self.watchlists.create_index("enabled", name="watchlists_enabled_idx")
+        await self.watchlists.create_index(
+            [("owner_id", ASCENDING), ("destination_id", ASCENDING)],
+            name="watchlists_owner_destination_idx",
+        )
         await self.destinations.create_index("owner_id", name="destinations_owner_idx")
         await self.destinations.create_index(
             [("owner_id", ASCENDING), ("label", ASCENDING)],
@@ -213,6 +227,16 @@ async def get_watchlist_by_id(watchlist_id: str) -> WatchlistRecord | None:
     return _document_to_watchlist(document)
 
 
+async def get_watchlist_for_owner(watchlist_id: str, owner_id: str) -> WatchlistRecord | None:
+    """Return a watchlist only when it belongs to the specified owner."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.watchlists.find_one({"_id": watchlist_id, "owner_id": owner_id})
+    if document is None:
+        return None
+    return _document_to_watchlist(document)
+
+
 async def get_watchlists_by_ids(watchlist_ids: Iterable[str]) -> dict[str, WatchlistRecord]:
     """Return watchlists keyed by id for the provided ids."""
     unique_ids = list(dict.fromkeys(watchlist_ids))
@@ -232,8 +256,105 @@ async def list_watchlists_for_owner(owner_id: str, *, enabled_only: bool = False
     query: dict[str, Any] = {"owner_id": owner_id}
     if enabled_only:
         query["enabled"] = True
-    documents = await db_client.watchlists.find(query).to_list(length=None)
+    documents = await db_client.watchlists.find(query).sort([("created_at", ASCENDING), ("_id", ASCENDING)]).to_list(
+        length=None
+    )
     return [_document_to_watchlist(document) for document in documents]
+
+
+async def update_watchlist_for_owner(
+    watchlist_id: str,
+    owner_id: str,
+    *,
+    name: str | None = None,
+    keywords: list[str] | None = None,
+    filters: WatchlistFilters | dict[str, Any] | None = None,
+    destination_id: str | None = None,
+    enabled: bool | None = None,
+) -> WatchlistRecord:
+    """Update a watchlist through an ID-and-owner authorization selector."""
+    await db_client.ensure_indexes()
+
+    selector = {"_id": watchlist_id, "owner_id": owner_id}
+    previous_document = await db_client.watchlists.find_one(selector)
+    if previous_document is None:
+        raise WatchlistNotFoundError(watchlist_id)
+    previous_watchlist = _document_to_watchlist(previous_document)
+
+    update_document: dict[str, Any] = {"updated_at": datetime.now(UTC)}
+    if name is not None:
+        update_document["name"] = normalize_watchlist_name(name)
+    if keywords is not None:
+        update_document["keywords"] = normalize_keywords(keywords)
+    if filters is not None:
+        update_document["filters"] = _coerce_watchlist_filters(filters).to_document()
+    if destination_id is not None:
+        update_document["destination_id"] = destination_id
+    if enabled is not None:
+        update_document["enabled"] = enabled
+
+    try:
+        document = await db_client.watchlists.find_one_and_update(
+            selector,
+            {"$set": update_document},
+            return_document=ReturnDocument.AFTER,
+        )
+    except DuplicateKeyError as exc:
+        raise WatchlistNameExistsError("watchlist name already exists for this owner") from exc
+    if document is None:
+        raise WatchlistNotFoundError(watchlist_id)
+    watchlist = _document_to_watchlist(document)
+    previous_keywords = previous_watchlist.keywords if previous_watchlist.enabled else []
+    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=previous_keywords)
+    return watchlist
+
+
+async def add_watchlist_keywords_for_owner(
+    watchlist_id: str,
+    owner_id: str,
+    keywords: list[str],
+) -> WatchlistRecord:
+    """Atomically add normalized keywords to an owned watchlist."""
+    await db_client.ensure_indexes()
+
+    normalized_keywords = normalize_keywords(keywords)
+    document = await db_client.watchlists.find_one_and_update(
+        {"_id": watchlist_id, "owner_id": owner_id},
+        {
+            "$addToSet": {"keywords": {"$each": normalized_keywords}},
+            "$set": {"updated_at": datetime.now(UTC)},
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    if document is None:
+        raise WatchlistNotFoundError(watchlist_id)
+    watchlist = _document_to_watchlist(document)
+    await sync_watchlist_subscriptions(watchlist, "mercari")
+    return watchlist
+
+
+async def remove_watchlist_keyword_for_owner(
+    watchlist_id: str,
+    owner_id: str,
+    keyword: str,
+) -> WatchlistRecord:
+    """Atomically remove one normalized keyword from an owned watchlist."""
+    await db_client.ensure_indexes()
+
+    normalized_keyword = normalize_registry_keyword(keyword)
+    document = await db_client.watchlists.find_one_and_update(
+        {"_id": watchlist_id, "owner_id": owner_id},
+        {
+            "$pull": {"keywords": normalized_keyword},
+            "$set": {"updated_at": datetime.now(UTC)},
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    if document is None:
+        raise WatchlistNotFoundError(watchlist_id)
+    watchlist = _document_to_watchlist(document)
+    await sync_watchlist_subscriptions(watchlist, "mercari")
+    return watchlist
 
 
 async def update_watchlist(
@@ -303,6 +424,29 @@ async def set_watchlist_enabled(watchlist_id: str, enabled: bool) -> WatchlistRe
     return watchlist
 
 
+async def set_watchlist_enabled_for_owner(watchlist_id: str, owner_id: str, enabled: bool) -> WatchlistRecord:
+    """Set monitoring state through an ID-and-owner authorization selector."""
+    await db_client.ensure_indexes()
+
+    selector = {"_id": watchlist_id, "owner_id": owner_id}
+    previous_document = await db_client.watchlists.find_one(selector)
+    if previous_document is None:
+        raise WatchlistNotFoundError(watchlist_id)
+    previous_watchlist = _document_to_watchlist(previous_document)
+
+    document = await db_client.watchlists.find_one_and_update(
+        selector,
+        {"$set": {"enabled": enabled, "updated_at": datetime.now(UTC)}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if document is None:
+        raise WatchlistNotFoundError(watchlist_id)
+    watchlist = _document_to_watchlist(document)
+    previous_keywords = previous_watchlist.keywords if previous_watchlist.enabled else []
+    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=previous_keywords)
+    return watchlist
+
+
 async def delete_watchlist(watchlist_id: str) -> bool:
     """Delete a watchlist and return whether a document was removed."""
     await db_client.ensure_indexes()
@@ -312,6 +456,21 @@ async def delete_watchlist(watchlist_id: str) -> bool:
         return False
 
     result = await db_client.watchlists.delete_one({"_id": watchlist_id})
+    if result.deleted_count > 0:
+        await remove_watchlist_subscriptions(watchlist_id, "mercari")
+    return result.deleted_count > 0
+
+
+async def delete_watchlist_for_owner(watchlist_id: str, owner_id: str) -> bool:
+    """Delete an owned watchlist without revealing foreign resource existence."""
+    await db_client.ensure_indexes()
+
+    selector = {"_id": watchlist_id, "owner_id": owner_id}
+    previous_document = await db_client.watchlists.find_one(selector)
+    if previous_document is None:
+        return False
+
+    result = await db_client.watchlists.delete_one(selector)
     if result.deleted_count > 0:
         await remove_watchlist_subscriptions(watchlist_id, "mercari")
     return result.deleted_count > 0
@@ -354,6 +513,16 @@ async def get_preset_keyword_by_id(preset_id: str) -> PresetKeywordRecord | None
     await db_client.ensure_indexes()
 
     document = await db_client.preset_keywords.find_one({"_id": preset_id})
+    if document is None:
+        return None
+    return _document_to_preset_keyword(document)
+
+
+async def get_enabled_preset_keyword_by_id(preset_id: str) -> PresetKeywordRecord | None:
+    """Return a preset only when it is enabled for tenant selection."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.preset_keywords.find_one({"_id": preset_id, "enabled": True})
     if document is None:
         return None
     return _document_to_preset_keyword(document)
@@ -654,6 +823,16 @@ async def get_destination_by_id(destination_id: str) -> DestinationRecord | None
     return _document_to_destination(document)
 
 
+async def get_destination_for_owner(destination_id: str, owner_id: str) -> DestinationRecord | None:
+    """Return a destination only when it belongs to the specified owner."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.destinations.find_one({"_id": destination_id, "owner_id": owner_id})
+    if document is None:
+        return None
+    return _document_to_destination(document)
+
+
 async def get_destinations_by_ids(destination_ids: Iterable[str]) -> dict[str, DestinationRecord]:
     """Return destinations keyed by id for the provided ids."""
     unique_ids = list(dict.fromkeys(destination_ids))
@@ -670,8 +849,40 @@ async def list_destinations_for_owner(owner_id: str) -> list[DestinationRecord]:
     """Return all destinations owned by a tenant."""
     await db_client.ensure_indexes()
 
-    documents = await db_client.destinations.find({"owner_id": owner_id}).to_list(length=None)
+    documents = await db_client.destinations.find({"owner_id": owner_id}).sort(
+        [("created_at", ASCENDING), ("_id", ASCENDING)]
+    ).to_list(length=None)
     return [_document_to_destination(document) for document in documents]
+
+
+async def update_destination_for_owner(
+    destination_id: str,
+    owner_id: str,
+    *,
+    label: str | None = None,
+    webhook_url: str | None = None,
+) -> DestinationRecord:
+    """Update destination metadata through an ID-and-owner selector."""
+    await db_client.ensure_indexes()
+
+    update_document: dict[str, Any] = {"updated_at": datetime.now(UTC)}
+    if label is not None:
+        update_document["label"] = normalize_label(label)
+    if webhook_url is not None:
+        update_document["webhook_url_encrypted"] = encrypt_webhook_url(validate_webhook_url(webhook_url))
+        update_document["verified_at"] = None
+
+    try:
+        document = await db_client.destinations.find_one_and_update(
+            {"_id": destination_id, "owner_id": owner_id},
+            {"$set": update_document},
+            return_document=ReturnDocument.AFTER,
+        )
+    except DuplicateKeyError as exc:
+        raise DestinationLabelExistsError("destination label already exists for this owner") from exc
+    if document is None:
+        raise DestinationNotFoundError(destination_id)
+    return _document_to_destination(document)
 
 
 async def update_destination(
@@ -724,12 +935,54 @@ async def mark_destination_verified(
     return _document_to_destination(document)
 
 
+async def mark_destination_verified_for_owner(
+    destination_id: str,
+    owner_id: str,
+    verified_at: datetime | None = None,
+) -> DestinationRecord:
+    """Stamp verification through an ID-and-owner selector."""
+    await db_client.ensure_indexes()
+
+    timestamp = datetime.now(UTC)
+    verification_timestamp = _as_utc(verified_at) if verified_at is not None else timestamp
+    owner_selector = {"_id": destination_id, "owner_id": owner_id}
+    document = await db_client.destinations.find_one_and_update(
+        {**owner_selector, "verified_at": None},
+        {"$set": {"verified_at": verification_timestamp, "updated_at": timestamp}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if document is None:
+        document = await db_client.destinations.find_one(owner_selector)
+        if document is None:
+            raise DestinationNotFoundError(destination_id)
+    return _document_to_destination(document)
+
+
 async def delete_destination(destination_id: str) -> bool:
     """Delete a destination and return whether a document was removed."""
     await db_client.ensure_indexes()
 
     # Watchlist reference integrity is enforced by the API layer in a later phase.
     result = await db_client.destinations.delete_one({"_id": destination_id})
+    return result.deleted_count > 0
+
+
+async def destination_is_referenced_for_owner(destination_id: str, owner_id: str) -> bool:
+    """Return whether an owner's watchlist references one of their destinations."""
+    await db_client.ensure_indexes()
+
+    document = await db_client.watchlists.find_one(
+        {"owner_id": owner_id, "destination_id": destination_id},
+        {"_id": 1},
+    )
+    return document is not None
+
+
+async def delete_destination_for_owner(destination_id: str, owner_id: str) -> bool:
+    """Delete a destination through an ID-and-owner selector."""
+    await db_client.ensure_indexes()
+
+    result = await db_client.destinations.delete_one({"_id": destination_id, "owner_id": owner_id})
     return result.deleted_count > 0
 
 
@@ -864,6 +1117,35 @@ async def discard_pending_alert_delivery(delivery_id: str) -> None:
     await db_client.alerts.delete_one({"_id": delivery_id, "status": "pending"})
 
 
+async def list_recent_alert_deliveries_for_owner(
+    owner_id: str,
+    *,
+    limit: int,
+    before_created_at: datetime | None = None,
+    before_id: str | None = None,
+) -> list[AlertDeliveryRecord]:
+    """Return a bounded newest-first page position from an owner's sent alerts."""
+    await db_client.ensure_indexes()
+
+    if limit < 1:
+        raise ValueError("alert page limit must be positive")
+    if (before_created_at is None) is not (before_id is None):
+        raise ValueError("alert cursor requires both created_at and id")
+
+    query: dict[str, Any] = {"owner_id": owner_id, "status": "sent"}
+    if before_created_at is not None and before_id is not None:
+        cursor_timestamp = _as_utc(before_created_at)
+        query["$or"] = [
+            {"created_at": {"$lt": cursor_timestamp}},
+            {"created_at": cursor_timestamp, "_id": {"$lt": before_id}},
+        ]
+
+    documents = await db_client.alerts.find(query).sort(
+        [("created_at", DESCENDING), ("_id", DESCENDING)]
+    ).to_list(length=limit)
+    return [_document_to_alert_delivery(document) for document in documents]
+
+
 def _document_to_user(document: dict[str, Any]) -> UserRecord:
     return UserRecord(
         _id=document["_id"],
@@ -929,6 +1211,22 @@ def _document_to_preset_keyword(document: dict[str, Any]) -> PresetKeywordRecord
         enabled=document["enabled"],
         created_at=_as_utc(document["created_at"]),
         updated_at=_as_utc(document["updated_at"]),
+    )
+
+
+def _document_to_alert_delivery(document: dict[str, Any]) -> AlertDeliveryRecord:
+    delivered_at = document.get("delivered_at")
+    return AlertDeliveryRecord(
+        _id=document["_id"],
+        listing_id=document["listing_id"],
+        destination_id=document["destination_id"],
+        marketplace=document["marketplace"],
+        title=document["title"],
+        canonical_url=document["canonical_url"],
+        matched_keywords=list(document.get("matched_keywords", [])),
+        status=document["status"],
+        created_at=_as_utc(document["created_at"]),
+        delivered_at=_as_utc(delivered_at) if delivered_at is not None else None,
     )
 
 

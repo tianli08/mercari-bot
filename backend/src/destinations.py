@@ -39,6 +39,10 @@ class DestinationNotFoundError(Exception):
     """Raised when a destination cannot be found for an update."""
 
 
+class DestinationInUseError(Exception):
+    """Raised when a destination is still referenced by a watchlist."""
+
+
 class InvalidWebhookUrlError(Exception):
     """Raised when a Discord webhook URL fails validation."""
 

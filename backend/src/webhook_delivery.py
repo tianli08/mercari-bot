@@ -16,27 +16,10 @@ from .destinations import DestinationRecord
 from .discord_messages import build_listing_embed
 from .listings import ListingRecord
 from .logging_utils import ContextLoggerAdapter, get_logger, log_exception
+from .webhook_errors import WebhookDeliveryError, WebhookPermanentError, WebhookTransientError
 
 webhook_logger = get_logger("webhook")
-
-
-class WebhookDeliveryError(RuntimeError):
-    """Raised when a Discord webhook delivery does not succeed."""
-
-    def __init__(self, destination_id: str, reason: str, *, status: int | None = None) -> None:
-        """Initialize an error containing no write-capable webhook secret."""
-        self.destination_id = destination_id
-        self.status = status
-        status_text = f" (HTTP {status})" if status is not None else ""
-        super().__init__(f"Webhook delivery failed for destination {destination_id}{status_text}: {reason}")
-
-
-class WebhookPermanentError(WebhookDeliveryError):
-    """Raised when a Discord webhook is missing or no longer authorized."""
-
-
-class WebhookTransientError(WebhookDeliveryError):
-    """Raised when bounded retries cannot recover webhook delivery."""
+WEBHOOK_VERIFICATION_MESSAGE = "Marketplace Monitor webhook verification"
 
 
 class _WebhookRateLimitError(WebhookTransientError):
@@ -67,6 +50,11 @@ class DiscordWebhookSender:
             raise WebhookDeliveryError(destination_id, "webhook credentials could not be loaded") from None
 
         payload = {"embeds": [build_listing_embed(listing).to_dict()]}
+        await self._deliver(destination_id, webhook_url, payload)
+        await self._stamp_verified(destination)
+
+    async def _deliver(self, destination_id: str, webhook_url: str, payload: dict[str, Any]) -> None:
+        """Deliver one secret-safe payload using the bounded transport policy."""
         attempts = max(1, self.max_attempts)
         timeout = aiohttp.ClientTimeout(total=max(0.1, self.timeout_seconds))
 
@@ -106,7 +94,6 @@ class DiscordWebhookSender:
                 )
                 await self.sleep(backoff)
             else:
-                await self._stamp_verified(destination)
                 return
 
     async def _post_once(
@@ -167,6 +154,47 @@ class DiscordWebhookSender:
                 safe_error,
                 destination_id=destination._id,
             )
+
+
+@dataclass(frozen=True, slots=True)
+class DiscordWebhookVerifier:
+    """Send a fixed test message and stamp an owned destination on success."""
+
+    session: aiohttp.ClientSession
+    timeout_seconds: float = settings.webhook_timeout_seconds
+    max_attempts: int = settings.webhook_max_attempts
+    retry_backoff_seconds: float = settings.webhook_retry_backoff_seconds
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    logger: ContextLoggerAdapter = webhook_logger
+
+    async def __call__(self, destination: DestinationRecord, owner_id: str) -> DestinationRecord:
+        """Verify an owned destination without creating a listing alert record."""
+        try:
+            webhook_url = destination.webhook_url()
+        except Exception:
+            raise WebhookDeliveryError(
+                destination._id,
+                "webhook credentials could not be loaded",
+            ) from None
+
+        sender = DiscordWebhookSender(
+            self.session,
+            timeout_seconds=self.timeout_seconds,
+            max_attempts=self.max_attempts,
+            retry_backoff_seconds=self.retry_backoff_seconds,
+            sleep=self.sleep,
+            logger=self.logger,
+        )
+        await sender._deliver(
+            destination._id,
+            webhook_url,
+            {"content": WEBHOOK_VERIFICATION_MESSAGE},
+        )
+        return await database.mark_destination_verified_for_owner(
+            destination._id,
+            owner_id,
+            datetime.now(UTC),
+        )
 
 
 async def _read_retry_after(response: aiohttp.ClientResponse, fallback: float) -> float:
