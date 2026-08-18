@@ -1,72 +1,60 @@
-# Archive Fashion Monitor & ML Scraper
+Static Archive fullstack app.
 
-A high-performance, distributed SaaS application designed to automate the discovery of avant-garde and archival fashion listings across global marketplaces like Mercari. 
+Searches Mercari for archive fashion listings (Carol Christian Poell, Boris Bidjan Saberi, Margiela, etc.) and posts matches to Discord. Each user signs up on the dashboard, sets up watchlists of keywords, and gets alerts sent to their own Discord webhooks.
 
-This system moves beyond basic keyword matching by utilizing a custom machine learning and computer vision pipeline trained specifically on archival designers (e.g., Carol Christian Poell, Boris Bidjan Saberi, Maison Margiela). It actively filters out noise and low-relevance items, routing high-confidence hits directly to user-configured Discord servers in real time.
+The repo has three parts:
 
-## Key Features
-* **Intelligent Filtering Pipeline:** Decoupled Python-based scraping engine utilizing Selenium and custom ML datasets to accurately classify niche fashion items.
-* **Real-Time Discord Integration:** Instantaneous webhook delivery of targeted listings directly to user-selected servers and channels.
-* **SaaS Dashboard:** A scalable web interface for users to authenticate, manage complex keyword matrices, adjust ML confidence thresholds, and configure brand-specific drop-down parameters.
-* **Distributed Architecture:** Asynchronous task processing utilizing Celery and Redis to handle concurrent scraping tasks and ML inference without blocking API operations.
+- `backend/` – the scraper worker and the FastAPI app, sharing MongoDB
+- `web/` – the dashboard frontend
+- `infra/` – deployment config
 
-## Running the backend services
+## Running the backend
 
-Run commands from `backend/`. The worker and API are separate processes that share MongoDB:
+Everything runs with [uv](https://docs.astral.sh/uv/) from `backend/`:
 
-- Worker: `uv run python -m src.main`
-- API (development): `uv run uvicorn src.api.app:app --reload`
-- API (settings-based host and port): `uv run python -m src.api_main`
+```bash
+# scraper worker
+uv run python -m src.main
 
-### Authentication configuration
+# API, dev mode with reload
+uv run uvicorn src.api.app:app --reload
 
-The API exposes `POST /api/v1/auth/signup`, `POST /api/v1/auth/login`,
-`POST /api/v1/auth/logout`, and `GET /api/v1/auth/me`. Signup creates an
-active account and starts a session. Login is limited to active accounts;
-pending and suspended accounts receive the same generic credential error.
-Sessions use an expiring JWT in an `HttpOnly` cookie, and rotating the signing
-secret signs all users out.
+# API, host/port from settings
+uv run python -m src.api_main
+```
 
-Set these environment variables before importing or starting the backend:
+The worker and the API are separate processes. Both need MongoDB.
 
-- `JWT_SECRET`: required signing secret containing at least 32 characters.
-  Generate a development value with
-  `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
-- `JWT_TOKEN_LIFETIME_SECONDS`: session lifetime from 60 to 86400 seconds
-  (default `3600`).
-- `AUTH_COOKIE_NAME`: cookie name (default `mercari_session`).
-- `AUTH_COOKIE_SECURE`: use `false` only for local HTTP development; production
-  requires `true`.
-- `AUTH_COOKIE_SAMESITE`: `lax` by default; `none` is accepted only with a
-  secure cookie and requires a separately designed CSRF defense before
-  authenticated mutations are deployed cross-site.
-- `API_ENVIRONMENT`: `development`, `test`, or `production`. Production
-  refuses to start unless secure cookies are enabled.
-- `JWT_ISSUER` and `JWT_AUDIENCE`: optional expected token metadata with
-  defaults for this API and dashboard.
+## Auth
 
-Password inputs must be 12–128 characters. The API stores only Argon2id hashes
-and never returns password hashes or raw session tokens.
+The API has `POST /api/v1/auth/signup`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, and `GET /api/v1/auth/me`. Signup creates an active account and starts a session. Login only works for active accounts; pending and suspended accounts get the same generic credential error so you can't probe account state.
 
-### Tenant resource API
+Sessions are an expiring JWT in an `HttpOnly` cookie. Rotating the signing secret logs everyone out.
 
-Authenticated clients can manage watchlists and Discord destinations under
-`/api/v1`. Tenant identity always comes from the signed session cookie; request
-bodies do not accept owner or tenant fields, and missing and foreign-owned IDs
-both return `404`.
+Environment variables (set these before starting anything):
+
+- `JWT_SECRET` – required, at least 32 characters. For local dev:
+  `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+- `JWT_TOKEN_LIFETIME_SECONDS` – 60 to 86400, default `3600`
+- `AUTH_COOKIE_NAME` – default `mercari_session`
+- `AUTH_COOKIE_SECURE` – only set `false` for local HTTP dev; production requires `true`
+- `AUTH_COOKIE_SAMESITE` – default `lax`. `none` only works with a secure cookie, and don't use it cross-site without a real CSRF defense in place first
+- `API_ENVIRONMENT` – `development`, `test`, or `production`. Production refuses to start without secure cookies
+- `JWT_ISSUER` / `JWT_AUDIENCE` – optional, have sensible defaults
+
+Passwords are 12–128 characters, stored as Argon2id hashes. The API never returns hashes or raw session tokens.
+
+## Tenant API
+
+Logged-in users manage their own watchlists and Discord destinations under `/api/v1`. The tenant always comes from the session cookie — request bodies don't take owner/tenant fields, and both missing and foreign-owned IDs come back as `404`.
 
 - Watchlists: `POST/GET /watchlists`, `GET/PATCH/DELETE /watchlists/{id}`
-- Keywords: `POST/DELETE /watchlists/{id}/keywords` and
-  `POST /watchlists/{id}/keywords/from-preset`
+- Keywords: `POST/DELETE /watchlists/{id}/keywords`, `POST /watchlists/{id}/keywords/from-preset`
 - Monitoring: `PATCH /watchlists/{id}/monitoring`
 - Presets: `GET /presets` (enabled catalog entries only)
-- Destinations: `POST/GET /destinations`,
-  `GET/PATCH/DELETE /destinations/{id}`, and
-  `POST /destinations/{id}/verify`
+- Destinations: `POST/GET /destinations`, `GET/PATCH/DELETE /destinations/{id}`, `POST /destinations/{id}/verify`
 - Recent alerts: `GET /alerts/recent?limit=20&cursor=...`
 
-Destination responses contain labels, timestamps, type, and verification
-state only. Discord webhook URLs are encrypted at rest and are never returned,
-including in masked form. The recent-alert feed contains sent alerts only,
-sorts newest first by creation time and ID, and uses an opaque cursor with a
-maximum page size of 100.
+Webhook URLs are encrypted at rest and never returned by the API, not even masked. Destination responses only include the label, type, timestamps, and verification state. The alerts feed is sent alerts only, newest first, opaque cursor, max page size 100.
+
+## Currently INFRA and WEB are being developed.
