@@ -52,7 +52,6 @@ class Settings(BaseSettings):
     discord_key: SecretStr
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     destination_secret_key: SecretStr
-    designer_webhook: str
     designer_channel_id: str
     saved_channel_id: str
     mihara_channel_id: str | None = None
