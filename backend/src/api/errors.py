@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from ..database import KeywordMutationTransactionRequiredError
 from ..destinations import (
     DestinationInUseError,
     DestinationLabelExistsError,
@@ -35,6 +36,14 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(
         WatchlistNameExistsError,
         _build_error_handler(409, "A watchlist with this name already exists", "watchlist_name_exists"),
+    )
+    app.add_exception_handler(
+        KeywordMutationTransactionRequiredError,
+        _build_error_handler(
+            503,
+            "Keyword updates require a transaction-capable MongoDB",
+            "keyword_transaction_unavailable",
+        ),
     )
     app.add_exception_handler(
         DestinationLabelExistsError,

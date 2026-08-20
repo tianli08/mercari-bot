@@ -217,3 +217,72 @@ async def test_watchlist_list_requires_authentication(api_database: ApiResourceD
 
     assert response.status_code == 401
     assert response.json()["code"] == "authentication_required"
+
+
+async def test_keyword_add_rolls_back_when_registry_sync_fails(
+    api_database: ApiResourceDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed keyword add leaves the watchlist and registry at the committed pre-image."""
+    application = create_app()
+    async with client_for(application) as client:
+        tenant = await signup(client, "rollback-owner@example.com")
+        destination = await create_destination(client)
+        created = await client.post(
+            "/api/v1/watchlists",
+            json={"name": "Atomic", "keywords": ["rick owens"], "destination_id": destination["id"]},
+        )
+        watchlist_id = created.json()["id"]
+
+        async def boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("injected registry failure")
+
+        monkeypatch.setattr(database, "sync_watchlist_subscriptions", boom)
+        with pytest.raises(RuntimeError, match="injected registry failure"):
+            await database.add_watchlist_keywords_for_owner(watchlist_id, tenant["id"], ["maison margiela"])
+        fetched = await client.get(f"/api/v1/watchlists/{watchlist_id}")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["keywords"] == ["rick owens"]
+    assert await database.get_registry_entry("mercari", "rick owens") is not None
+    assert await database.get_registry_entry("mercari", "maison margiela") is None
+
+
+async def test_shared_keyword_registry_stays_isolated_across_tenants(
+    api_database: ApiResourceDatabase,
+) -> None:
+    """One tenant removing a shared keyword does not drop the other tenant's subscriber."""
+    application = create_app()
+    async with client_for(application) as tenant_a, client_for(application) as tenant_b:
+        await signup(tenant_a, "shared-a@example.com")
+        await signup(tenant_b, "shared-b@example.com")
+        destination_a = await create_destination(tenant_a, "A")
+        destination_b = await create_destination(tenant_b, "B")
+        created_a = await tenant_a.post(
+            "/api/v1/watchlists",
+            json={"name": "A", "keywords": ["shared"], "destination_id": destination_a["id"]},
+        )
+        created_b = await tenant_b.post(
+            "/api/v1/watchlists",
+            json={"name": "B", "keywords": ["shared"], "destination_id": destination_b["id"]},
+        )
+        watchlist_a = created_a.json()["id"]
+        watchlist_b = created_b.json()["id"]
+
+        removed = await tenant_a.request(
+            "DELETE",
+            f"/api/v1/watchlists/{watchlist_a}/keywords",
+            json={"keyword": "shared"},
+        )
+        still_b = await tenant_b.get(f"/api/v1/watchlists/{watchlist_b}")
+        entry = await database.get_registry_entry("mercari", "shared")
+        deleted_b = await tenant_b.delete(f"/api/v1/watchlists/{watchlist_b}")
+
+    assert removed.status_code == 200
+    assert still_b.json()["keywords"] == ["shared"]
+    assert entry is not None
+    assert entry.subscriber_count == 1
+    assert [subscriber.watchlist_id for subscriber in entry.subscribers] == [watchlist_b]
+    assert deleted_b.status_code == 204
+    leftover = await api_database.keyword_registry.find({"keyword": "shared"}).to_list(length=None)
+    assert leftover == []
