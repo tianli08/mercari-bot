@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from datetime import UTC, datetime
@@ -71,6 +72,10 @@ async def test_unsubscribing_one_watchlist_leaves_other_subscriber(fake_database
     """Two watchlists share one registry entry and unsubscribe independently."""
     await database.subscribe_keyword("mercari", "rick owens", owner_id="owner-1", watchlist_id="watchlist-1")
     await database.subscribe_keyword("mercari", "rick owens", owner_id="owner-2", watchlist_id="watchlist-2")
+    scraped_at = datetime(2025, 1, 1, tzinfo=UTC)
+    baselined_at = datetime(2025, 1, 2, tzinfo=UTC)
+    await database.mark_keyword_scraped("mercari", "rick owens", scraped_at)
+    await database.mark_keyword_baselined("mercari", "rick owens", baselined_at)
 
     entry = await database.get_registry_entry("mercari", "rick owens")
     assert entry is not None
@@ -84,6 +89,8 @@ async def test_unsubscribing_one_watchlist_leaves_other_subscriber(fake_database
     assert [(subscriber.owner_id, subscriber.watchlist_id) for subscriber in entry.subscribers] == [
         ("owner-2", "watchlist-2")
     ]
+    assert entry.last_scraped_at == scraped_at
+    assert entry.baselined_at == baselined_at
 
 
 async def test_unsubscribing_last_subscriber_deletes_entry(fake_database: FakeDatabaseClient) -> None:
@@ -94,6 +101,8 @@ async def test_unsubscribing_last_subscriber_deletes_entry(fake_database: FakeDa
     await database.unsubscribe_keyword("mercari", "julius", owner_id="owner-1", watchlist_id="missing")
 
     assert await database.get_registry_entry("mercari", "julius") is None
+    leftover = await fake_database.keyword_registry.find({"keyword": "julius"}).to_list(length=None)
+    assert leftover == []
 
 
 async def test_resubscribing_after_deletion_creates_fresh_unbaselined_entry(
@@ -311,3 +320,238 @@ async def test_watchlist_keyword_normalization_matches_registry(fake_database: F
     assert entry is not None
     assert entry._id == "mercari:rick owens"
     assert entry.subscriber_count == 1
+
+
+async def test_aborted_keyword_add_rolls_back_watchlist_and_registry(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed registry sync leaves the watchlist and registry at the pre-image."""
+    watchlist = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Rollback Add",
+        keywords=["keep"],
+        destination_id="destination-1",
+    )
+
+    async def boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("injected registry failure")
+
+    monkeypatch.setattr(database, "sync_watchlist_subscriptions", boom)
+
+    with pytest.raises(RuntimeError, match="injected registry failure"):
+        await database.add_watchlist_keywords_for_owner(watchlist._id, "owner-1", ["new"])
+
+    stored = await database.get_watchlist_by_id(watchlist._id)
+    assert stored is not None
+    assert stored.keywords == ["keep"]
+    assert await database.get_registry_entry("mercari", "keep") is not None
+    assert await database.get_registry_entry("mercari", "new") is None
+
+
+async def test_aborted_keyword_remove_leaves_subscriber_in_place(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed registry unsubscribe leaves both the keyword and subscriber visible."""
+    watchlist = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Rollback Remove",
+        keywords=["keep"],
+        destination_id="destination-1",
+    )
+
+    async def boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("injected unsubscribe failure")
+
+    monkeypatch.setattr(database, "sync_watchlist_subscriptions", boom)
+
+    with pytest.raises(RuntimeError, match="injected unsubscribe failure"):
+        await database.remove_watchlist_keyword_for_owner(watchlist._id, "owner-1", "keep")
+
+    stored = await database.get_watchlist_by_id(watchlist._id)
+    assert stored is not None
+    assert stored.keywords == ["keep"]
+    entry = await database.get_registry_entry("mercari", "keep")
+    assert entry is not None
+    assert entry.subscriber_count == 1
+
+
+async def test_aborted_last_subscriber_remove_does_not_leave_empty_registry_document(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Aborting prune after the occupancy update does not persist a zero-subscriber row."""
+    await database.subscribe_keyword("mercari", "julius", owner_id="owner-1", watchlist_id="watchlist-1")
+
+    async def boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("injected prune failure")
+
+    monkeypatch.setattr(fake_database.keyword_registry, "delete_one", boom)
+
+    with pytest.raises(RuntimeError, match="injected prune failure"):
+        await database.unsubscribe_keyword("mercari", "julius", owner_id="owner-1", watchlist_id="watchlist-1")
+
+    leftover = await fake_database.keyword_registry.find({"keyword": "julius"}).to_list(length=None)
+    assert len(leftover) == 1
+    assert leftover[0]["subscriber_count"] == 1
+    assert leftover[0]["subscribers"] == [{"owner_id": "owner-1", "watchlist_id": "watchlist-1"}]
+
+
+async def test_overlapping_shared_keyword_mutations_keep_occupancy_correct(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """Concurrent add/remove on one keyword leaves exactly the surviving subscriber."""
+    first = await database.create_watchlist(
+        owner_id="owner-1",
+        name="First",
+        keywords=["shared"],
+        destination_id="destination-1",
+    )
+    second = await database.create_watchlist(
+        owner_id="owner-2",
+        name="Second",
+        keywords=[],
+        destination_id="destination-2",
+    )
+
+    await asyncio.gather(
+        database.add_watchlist_keywords_for_owner(second._id, "owner-2", ["shared"]),
+        database.remove_watchlist_keyword_for_owner(first._id, "owner-1", "shared"),
+    )
+
+    first_stored = await database.get_watchlist_by_id(first._id)
+    second_stored = await database.get_watchlist_by_id(second._id)
+    entry = await database.get_registry_entry("mercari", "shared")
+    assert first_stored is not None and first_stored.keywords == []
+    assert second_stored is not None and second_stored.keywords == ["shared"]
+    assert entry is not None
+    assert entry.subscriber_count == 1
+    assert [subscriber.watchlist_id for subscriber in entry.subscribers] == [second._id]
+    active = await database.list_active_registry_entries("mercari")
+    assert [item.keyword for item in active] == ["shared"]
+
+
+async def test_concurrent_duplicate_adds_do_not_double_count_subscriber(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """Two concurrent adds of the same watchlist/keyword pair end at count 1."""
+    watchlist = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Duplicates",
+        keywords=[],
+        destination_id="destination-1",
+    )
+
+    await asyncio.gather(
+        database.add_watchlist_keywords_for_owner(watchlist._id, "owner-1", ["same"]),
+        database.add_watchlist_keywords_for_owner(watchlist._id, "owner-1", ["same"]),
+    )
+
+    stored = await database.get_watchlist_by_id(watchlist._id)
+    entry = await database.get_registry_entry("mercari", "same")
+    assert stored is not None and stored.keywords == ["same"]
+    assert entry is not None
+    assert entry.subscriber_count == 1
+    assert [subscriber.watchlist_id for subscriber in entry.subscribers] == [watchlist._id]
+
+
+async def test_disabled_watchlist_keyword_add_does_not_create_demand_until_enable(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """Keywords stored while disabled occupy the registry only after an atomic enable."""
+    watchlist = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Paused",
+        keywords=[],
+        destination_id="destination-1",
+        enabled=False,
+    )
+    updated = await database.add_watchlist_keywords_for_owner(watchlist._id, "owner-1", ["later"])
+    assert updated.keywords == ["later"]
+    assert await database.get_registry_entry("mercari", "later") is None
+
+    enabled = await database.set_watchlist_enabled(watchlist._id, True)
+    assert enabled.enabled is True
+    assert await database.get_registry_entry("mercari", "later") is not None
+
+
+async def test_aborted_enable_does_not_subscribe_stored_keywords(
+    fake_database: FakeDatabaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed enable rolls back both the flag and any registry occupancy."""
+    watchlist = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Paused Enable",
+        keywords=["later"],
+        destination_id="destination-1",
+        enabled=False,
+    )
+
+    async def boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("injected enable failure")
+
+    monkeypatch.setattr(database, "sync_watchlist_subscriptions", boom)
+
+    with pytest.raises(RuntimeError, match="injected enable failure"):
+        await database.set_watchlist_enabled(watchlist._id, True)
+
+    stored = await database.get_watchlist_by_id(watchlist._id)
+    assert stored is not None
+    assert stored.enabled is False
+    assert stored.keywords == ["later"]
+    assert await database.get_registry_entry("mercari", "later") is None
+    leftover = await fake_database.keyword_registry.find({"keyword": "later"}).to_list(length=None)
+    assert leftover == []
+
+
+async def test_duplicate_name_update_does_not_change_registry(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """A duplicate-name error aborts before a partial registry update can commit."""
+    first = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Alpha",
+        keywords=["keep"],
+        destination_id="destination-1",
+    )
+    second = await database.create_watchlist(
+        owner_id="owner-1",
+        name="Beta",
+        keywords=["other"],
+        destination_id="destination-2",
+    )
+
+    with pytest.raises(database.WatchlistNameExistsError):
+        await database.update_watchlist(second._id, name="Alpha", keywords=["changed"])
+
+    stored = await database.get_watchlist_by_id(second._id)
+    assert stored is not None
+    assert stored.name == "Beta"
+    assert stored.keywords == ["other"]
+    stored_first = await database.get_watchlist_by_id(first._id)
+    assert stored_first is not None
+    assert stored_first.keywords == ["keep"]
+    assert await database.get_registry_entry("mercari", "keep") is not None
+    assert await database.get_registry_entry("mercari", "other") is not None
+    assert await database.get_registry_entry("mercari", "changed") is None
+
+
+async def test_keyword_mutations_fail_closed_without_transaction_support(
+    fake_database: FakeDatabaseClient,
+) -> None:
+    """Standalone clients that cannot start transactions do not fall back to sequential writes."""
+
+    class StandaloneClient:
+        """Client without session support."""
+
+    fake_database.client = StandaloneClient()
+    with pytest.raises(database.KeywordMutationTransactionRequiredError):
+        await database.create_watchlist(
+            owner_id="owner-1",
+            name="Standalone",
+            keywords=["rick owens"],
+            destination_id="destination-1",
+        )
+    assert await fake_database.watchlists.find_one({"name": "Standalone"}) is None

@@ -22,6 +22,8 @@
 ## Storage
 - **MongoDB is the single store** for everything: users, watchlists, destinations, the
   global keyword registry, canonical listings, and per-destination alert dedupe.
+- Watchlist keyword mutations and registry occupancy commit together in one MongoDB
+  transaction. Those writes require a replica set or mongos, not a standalone `mongod`.
 
 ## Runtime topology (target)
 - `backend/` Python service, two logical roles sharing one Mongo database:

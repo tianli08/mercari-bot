@@ -5,13 +5,16 @@ Includes listings, per-destination alert deliveries, tenants, watchlists, destin
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import asyncio
+from collections.abc import Awaitable, Callable, Iterable
+from contextvars import ContextVar
+from copy import deepcopy
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 import motor.motor_asyncio
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import ConfigurationError, DuplicateKeyError, InvalidOperation, OperationFailure
 
 from .alert_deliveries import AlertDeliveryRecord
 from .config import settings
@@ -42,6 +45,24 @@ from .watchlists import (
     normalize_keywords,
     normalize_watchlist_name,
 )
+
+T = TypeVar("T")
+
+_TRANSACTION_REQUIRED_MESSAGE = (
+    "Keyword mutations require a replica-set or sharded MongoDB that supports multi-document transactions."
+)
+_MAX_KEYWORD_MUTATION_RETRIES = 3
+_active_keyword_session: ContextVar[Any | None] = ContextVar("_active_keyword_session", default=None)
+
+
+class KeywordMutationTransactionRequiredError(Exception):
+    """Raised when keyword mutations cannot run inside a MongoDB transaction."""
+
+
+class _EmulatedMongoSession:
+    """Marker session for in-memory transaction emulation used by mongomock tests."""
+
+    emulated = True
 
 
 class DatabaseClient:
@@ -142,6 +163,197 @@ class DatabaseClient:
 db_client = DatabaseClient()
 
 
+def _session_kwargs(session: Any | None) -> dict[str, Any]:
+    if session is None or getattr(session, "emulated", False):
+        return {}
+    return {"session": session}
+
+
+def _uses_emulated_keyword_transactions() -> bool:
+    client = getattr(db_client, "client", None)
+    if client is None:
+        return False
+    return any("mongomock" in getattr(cls, "__module__", "") for cls in type(client).mro())
+
+
+def _is_transactions_unsupported(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    if isinstance(exc, NotImplementedError) and "session" in message:
+        return True
+    if isinstance(exc, OperationFailure):
+        details = getattr(exc, "details", None) or {}
+        errmsg = str(details.get("errmsg", "")).lower()
+        combined = f"{message} {errmsg}"
+        if "transaction numbers are only allowed" in combined:
+            return True
+        if exc.code == 20 and ("transaction" in combined or "replica set" in combined or "mongos" in combined):
+            return True
+        return False
+    if isinstance(exc, InvalidOperation) and "transaction" in message:
+        return True
+    return isinstance(exc, ConfigurationError) and ("transaction" in message or "replica" in message)
+
+
+def _ensure_keyword_mutation_lock() -> asyncio.Lock:
+    lock = getattr(db_client, "_keyword_mutation_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        db_client._keyword_mutation_lock = lock
+    return lock
+
+
+async def _snapshot_keyword_mutation_collections() -> list[tuple[Any, list[dict[str, Any]]]]:
+    snapshots: list[tuple[Any, list[dict[str, Any]]]] = []
+    for collection in (db_client.watchlists, db_client.keyword_registry):
+        documents = await collection.find({}).to_list(length=None)
+        snapshots.append((collection, deepcopy(documents)))
+    return snapshots
+
+
+async def _restore_keyword_mutation_collections(snapshots: list[tuple[Any, list[dict[str, Any]]]]) -> None:
+    for collection, documents in snapshots:
+        await collection.delete_many({})
+        if documents:
+            await collection.insert_many(documents)
+
+
+async def _run_emulated_keyword_mutation(mutator: Callable[[Any], Awaitable[T]]) -> T:
+    async with _ensure_keyword_mutation_lock():
+        snapshot = await _snapshot_keyword_mutation_collections()
+        session = _EmulatedMongoSession()
+        token = _active_keyword_session.set(session)
+        try:
+            try:
+                return await mutator(session)
+            except Exception:
+                await _restore_keyword_mutation_collections(snapshot)
+                raise
+        finally:
+            _active_keyword_session.reset(token)
+
+
+async def _run_mongo_keyword_mutation(mutator: Callable[[Any], Awaitable[T]]) -> T:
+    start_session = getattr(db_client.client, "start_session", None)
+    if not callable(start_session):
+        raise KeywordMutationTransactionRequiredError(_TRANSACTION_REQUIRED_MESSAGE)
+    try:
+        async with await start_session() as session:
+
+            async def callback(callback_session: Any) -> T:
+                token = _active_keyword_session.set(callback_session)
+                try:
+                    return await mutator(callback_session)
+                finally:
+                    _active_keyword_session.reset(token)
+
+            return await session.with_transaction(callback)
+    except KeywordMutationTransactionRequiredError:
+        raise
+    except Exception as exc:
+        if _is_transactions_unsupported(exc):
+            raise KeywordMutationTransactionRequiredError(_TRANSACTION_REQUIRED_MESSAGE) from exc
+        raise
+
+
+async def _run_keyword_mutation(mutator: Callable[[Any], Awaitable[T]]) -> T:
+    existing_session = _active_keyword_session.get()
+    if existing_session is not None:
+        return await mutator(existing_session)
+    if _uses_emulated_keyword_transactions():
+        return await _run_emulated_keyword_mutation(mutator)
+
+    last_error: Exception | None = None
+    for _ in range(_MAX_KEYWORD_MUTATION_RETRIES):
+        try:
+            return await _run_mongo_keyword_mutation(mutator)
+        except DuplicateKeyError as exc:
+            last_error = exc
+            continue
+    assert last_error is not None
+    raise last_error
+
+
+def _active_keywords(watchlist: WatchlistRecord | None) -> list[str]:
+    if watchlist is None or not watchlist.enabled:
+        return []
+    return list(watchlist.keywords)
+
+
+async def _sync_watchlist_keyword_projection(
+    previous: WatchlistRecord | None,
+    current: WatchlistRecord | None,
+    *,
+    session: Any,
+    marketplace: Marketplace = "mercari",
+) -> None:
+    if current is None:
+        if previous is None:
+            return
+        await remove_watchlist_subscriptions(previous._id, marketplace, session=session)
+        return
+    await sync_watchlist_subscriptions(
+        current,
+        marketplace,
+        previous_keywords=_active_keywords(previous),
+        session=session,
+    )
+
+
+async def _apply_watchlist_field_update(
+    selector: dict[str, Any],
+    *,
+    session: Any,
+    name: str | None = None,
+    keywords: list[str] | None = None,
+    filters: WatchlistFilters | dict[str, Any] | None = None,
+    destination_id: str | None = None,
+    enabled: bool | None = None,
+) -> WatchlistRecord:
+    previous_document = await db_client.watchlists.find_one(selector, **_session_kwargs(session))
+    if previous_document is None:
+        raise WatchlistNotFoundError(selector["_id"])
+    previous = _document_to_watchlist(previous_document)
+
+    update_document: dict[str, Any] = {"updated_at": datetime.now(UTC)}
+    if name is not None:
+        update_document["name"] = normalize_watchlist_name(name)
+    if keywords is not None:
+        update_document["keywords"] = normalize_keywords(keywords)
+    if filters is not None:
+        update_document["filters"] = _coerce_watchlist_filters(filters).to_document()
+    if destination_id is not None:
+        update_document["destination_id"] = destination_id
+    if enabled is not None:
+        update_document["enabled"] = enabled
+
+    try:
+        document = await db_client.watchlists.find_one_and_update(
+            selector,
+            {"$set": update_document},
+            return_document=ReturnDocument.AFTER,
+            **_session_kwargs(session),
+        )
+    except DuplicateKeyError as exc:
+        raise WatchlistNameExistsError("watchlist name already exists for this owner") from exc
+    if document is None:
+        raise WatchlistNotFoundError(selector["_id"])
+    current = _document_to_watchlist(document)
+    await _sync_watchlist_keyword_projection(previous, current, session=session)
+    return current
+
+
+async def _apply_watchlist_delete(selector: dict[str, Any], *, session: Any) -> bool:
+    previous_document = await db_client.watchlists.find_one(selector, **_session_kwargs(session))
+    if previous_document is None:
+        return False
+    previous = _document_to_watchlist(previous_document)
+    result = await db_client.watchlists.delete_one(selector, **_session_kwargs(session))
+    if result.deleted_count == 0:
+        return False
+    await _sync_watchlist_keyword_projection(previous, None, session=session)
+    return True
+
+
 async def create_user(
     email: str,
     password_hash: str,
@@ -200,21 +412,24 @@ async def create_watchlist(
     """Create a tenant watchlist and return the inserted record."""
     await db_client.ensure_indexes()
 
-    watchlist = WatchlistRecord.new(
-        owner_id=owner_id,
-        name=name,
-        keywords=keywords,
-        filters=filters,
-        destination_id=destination_id,
-        enabled=enabled,
-        created_at=created_at,
-    )
-    try:
-        await db_client.watchlists.insert_one(watchlist.to_document())
-    except DuplicateKeyError as exc:
-        raise WatchlistNameExistsError("watchlist name already exists for this owner") from exc
-    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=[])
-    return watchlist
+    async def mutate(session: Any) -> WatchlistRecord:
+        watchlist = WatchlistRecord.new(
+            owner_id=owner_id,
+            name=name,
+            keywords=keywords,
+            filters=filters,
+            destination_id=destination_id,
+            enabled=enabled,
+            created_at=created_at,
+        )
+        try:
+            await db_client.watchlists.insert_one(watchlist.to_document(), **_session_kwargs(session))
+        except DuplicateKeyError as exc:
+            raise WatchlistNameExistsError("watchlist name already exists for this owner") from exc
+        await _sync_watchlist_keyword_projection(None, watchlist, session=session)
+        return watchlist
+
+    return await _run_keyword_mutation(mutate)
 
 
 async def get_watchlist_by_id(watchlist_id: str) -> WatchlistRecord | None:
@@ -256,8 +471,10 @@ async def list_watchlists_for_owner(owner_id: str, *, enabled_only: bool = False
     query: dict[str, Any] = {"owner_id": owner_id}
     if enabled_only:
         query["enabled"] = True
-    documents = await db_client.watchlists.find(query).sort([("created_at", ASCENDING), ("_id", ASCENDING)]).to_list(
-        length=None
+    documents = (
+        await db_client.watchlists.find(query)
+        .sort([("created_at", ASCENDING), ("_id", ASCENDING)])
+        .to_list(length=None)
     )
     return [_document_to_watchlist(document) for document in documents]
 
@@ -274,39 +491,17 @@ async def update_watchlist_for_owner(
 ) -> WatchlistRecord:
     """Update a watchlist through an ID-and-owner authorization selector."""
     await db_client.ensure_indexes()
-
-    selector = {"_id": watchlist_id, "owner_id": owner_id}
-    previous_document = await db_client.watchlists.find_one(selector)
-    if previous_document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    previous_watchlist = _document_to_watchlist(previous_document)
-
-    update_document: dict[str, Any] = {"updated_at": datetime.now(UTC)}
-    if name is not None:
-        update_document["name"] = normalize_watchlist_name(name)
-    if keywords is not None:
-        update_document["keywords"] = normalize_keywords(keywords)
-    if filters is not None:
-        update_document["filters"] = _coerce_watchlist_filters(filters).to_document()
-    if destination_id is not None:
-        update_document["destination_id"] = destination_id
-    if enabled is not None:
-        update_document["enabled"] = enabled
-
-    try:
-        document = await db_client.watchlists.find_one_and_update(
-            selector,
-            {"$set": update_document},
-            return_document=ReturnDocument.AFTER,
+    return await _run_keyword_mutation(
+        lambda session: _apply_watchlist_field_update(
+            {"_id": watchlist_id, "owner_id": owner_id},
+            session=session,
+            name=name,
+            keywords=keywords,
+            filters=filters,
+            destination_id=destination_id,
+            enabled=enabled,
         )
-    except DuplicateKeyError as exc:
-        raise WatchlistNameExistsError("watchlist name already exists for this owner") from exc
-    if document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    watchlist = _document_to_watchlist(document)
-    previous_keywords = previous_watchlist.keywords if previous_watchlist.enabled else []
-    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=previous_keywords)
-    return watchlist
+    )
 
 
 async def add_watchlist_keywords_for_owner(
@@ -316,21 +511,30 @@ async def add_watchlist_keywords_for_owner(
 ) -> WatchlistRecord:
     """Atomically add normalized keywords to an owned watchlist."""
     await db_client.ensure_indexes()
-
     normalized_keywords = normalize_keywords(keywords)
-    document = await db_client.watchlists.find_one_and_update(
-        {"_id": watchlist_id, "owner_id": owner_id},
-        {
-            "$addToSet": {"keywords": {"$each": normalized_keywords}},
-            "$set": {"updated_at": datetime.now(UTC)},
-        },
-        return_document=ReturnDocument.AFTER,
-    )
-    if document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    watchlist = _document_to_watchlist(document)
-    await sync_watchlist_subscriptions(watchlist, "mercari")
-    return watchlist
+
+    async def mutate(session: Any) -> WatchlistRecord:
+        selector = {"_id": watchlist_id, "owner_id": owner_id}
+        previous_document = await db_client.watchlists.find_one(selector, **_session_kwargs(session))
+        if previous_document is None:
+            raise WatchlistNotFoundError(watchlist_id)
+        previous = _document_to_watchlist(previous_document)
+        document = await db_client.watchlists.find_one_and_update(
+            selector,
+            {
+                "$addToSet": {"keywords": {"$each": normalized_keywords}},
+                "$set": {"updated_at": datetime.now(UTC)},
+            },
+            return_document=ReturnDocument.AFTER,
+            **_session_kwargs(session),
+        )
+        if document is None:
+            raise WatchlistNotFoundError(watchlist_id)
+        watchlist = _document_to_watchlist(document)
+        await _sync_watchlist_keyword_projection(previous, watchlist, session=session)
+        return watchlist
+
+    return await _run_keyword_mutation(mutate)
 
 
 async def remove_watchlist_keyword_for_owner(
@@ -340,21 +544,30 @@ async def remove_watchlist_keyword_for_owner(
 ) -> WatchlistRecord:
     """Atomically remove one normalized keyword from an owned watchlist."""
     await db_client.ensure_indexes()
-
     normalized_keyword = normalize_registry_keyword(keyword)
-    document = await db_client.watchlists.find_one_and_update(
-        {"_id": watchlist_id, "owner_id": owner_id},
-        {
-            "$pull": {"keywords": normalized_keyword},
-            "$set": {"updated_at": datetime.now(UTC)},
-        },
-        return_document=ReturnDocument.AFTER,
-    )
-    if document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    watchlist = _document_to_watchlist(document)
-    await sync_watchlist_subscriptions(watchlist, "mercari")
-    return watchlist
+
+    async def mutate(session: Any) -> WatchlistRecord:
+        selector = {"_id": watchlist_id, "owner_id": owner_id}
+        previous_document = await db_client.watchlists.find_one(selector, **_session_kwargs(session))
+        if previous_document is None:
+            raise WatchlistNotFoundError(watchlist_id)
+        previous = _document_to_watchlist(previous_document)
+        document = await db_client.watchlists.find_one_and_update(
+            selector,
+            {
+                "$pull": {"keywords": normalized_keyword},
+                "$set": {"updated_at": datetime.now(UTC)},
+            },
+            return_document=ReturnDocument.AFTER,
+            **_session_kwargs(session),
+        )
+        if document is None:
+            raise WatchlistNotFoundError(watchlist_id)
+        watchlist = _document_to_watchlist(document)
+        await _sync_watchlist_keyword_projection(previous, watchlist, session=session)
+        return watchlist
+
+    return await _run_keyword_mutation(mutate)
 
 
 async def update_watchlist(
@@ -368,112 +581,55 @@ async def update_watchlist(
 ) -> WatchlistRecord:
     """Update mutable watchlist fields and return the updated record."""
     await db_client.ensure_indexes()
-
-    previous_document = await db_client.watchlists.find_one({"_id": watchlist_id})
-    if previous_document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    previous_watchlist = _document_to_watchlist(previous_document)
-
-    update_document: dict[str, Any] = {"updated_at": datetime.now(UTC)}
-    if name is not None:
-        update_document["name"] = normalize_watchlist_name(name)
-    if keywords is not None:
-        update_document["keywords"] = normalize_keywords(keywords)
-    if filters is not None:
-        update_document["filters"] = _coerce_watchlist_filters(filters).to_document()
-    if destination_id is not None:
-        update_document["destination_id"] = destination_id
-    if enabled is not None:
-        update_document["enabled"] = enabled
-
-    try:
-        document = await db_client.watchlists.find_one_and_update(
+    return await _run_keyword_mutation(
+        lambda session: _apply_watchlist_field_update(
             {"_id": watchlist_id},
-            {"$set": update_document},
-            return_document=ReturnDocument.AFTER,
+            session=session,
+            name=name,
+            keywords=keywords,
+            filters=filters,
+            destination_id=destination_id,
+            enabled=enabled,
         )
-    except DuplicateKeyError as exc:
-        raise WatchlistNameExistsError("watchlist name already exists for this owner") from exc
-    if document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    watchlist = _document_to_watchlist(document)
-    previous_keywords = previous_watchlist.keywords if previous_watchlist.enabled else []
-    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=previous_keywords)
-    return watchlist
+    )
 
 
 async def set_watchlist_enabled(watchlist_id: str, enabled: bool) -> WatchlistRecord:
     """Set a watchlist's enabled flag and return the updated record."""
     await db_client.ensure_indexes()
-
-    previous_document = await db_client.watchlists.find_one({"_id": watchlist_id})
-    if previous_document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    previous_watchlist = _document_to_watchlist(previous_document)
-
-    document = await db_client.watchlists.find_one_and_update(
-        {"_id": watchlist_id},
-        {"$set": {"enabled": enabled, "updated_at": datetime.now(UTC)}},
-        return_document=ReturnDocument.AFTER,
+    return await _run_keyword_mutation(
+        lambda session: _apply_watchlist_field_update(
+            {"_id": watchlist_id},
+            session=session,
+            enabled=enabled,
+        )
     )
-    if document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    watchlist = _document_to_watchlist(document)
-    previous_keywords = previous_watchlist.keywords if previous_watchlist.enabled else []
-    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=previous_keywords)
-    return watchlist
 
 
 async def set_watchlist_enabled_for_owner(watchlist_id: str, owner_id: str, enabled: bool) -> WatchlistRecord:
     """Set monitoring state through an ID-and-owner authorization selector."""
     await db_client.ensure_indexes()
-
-    selector = {"_id": watchlist_id, "owner_id": owner_id}
-    previous_document = await db_client.watchlists.find_one(selector)
-    if previous_document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    previous_watchlist = _document_to_watchlist(previous_document)
-
-    document = await db_client.watchlists.find_one_and_update(
-        selector,
-        {"$set": {"enabled": enabled, "updated_at": datetime.now(UTC)}},
-        return_document=ReturnDocument.AFTER,
+    return await _run_keyword_mutation(
+        lambda session: _apply_watchlist_field_update(
+            {"_id": watchlist_id, "owner_id": owner_id},
+            session=session,
+            enabled=enabled,
+        )
     )
-    if document is None:
-        raise WatchlistNotFoundError(watchlist_id)
-    watchlist = _document_to_watchlist(document)
-    previous_keywords = previous_watchlist.keywords if previous_watchlist.enabled else []
-    await sync_watchlist_subscriptions(watchlist, "mercari", previous_keywords=previous_keywords)
-    return watchlist
 
 
 async def delete_watchlist(watchlist_id: str) -> bool:
     """Delete a watchlist and return whether a document was removed."""
     await db_client.ensure_indexes()
-
-    previous_document = await db_client.watchlists.find_one({"_id": watchlist_id})
-    if previous_document is None:
-        return False
-
-    result = await db_client.watchlists.delete_one({"_id": watchlist_id})
-    if result.deleted_count > 0:
-        await remove_watchlist_subscriptions(watchlist_id, "mercari")
-    return result.deleted_count > 0
+    return await _run_keyword_mutation(lambda session: _apply_watchlist_delete({"_id": watchlist_id}, session=session))
 
 
 async def delete_watchlist_for_owner(watchlist_id: str, owner_id: str) -> bool:
     """Delete an owned watchlist without revealing foreign resource existence."""
     await db_client.ensure_indexes()
-
-    selector = {"_id": watchlist_id, "owner_id": owner_id}
-    previous_document = await db_client.watchlists.find_one(selector)
-    if previous_document is None:
-        return False
-
-    result = await db_client.watchlists.delete_one(selector)
-    if result.deleted_count > 0:
-        await remove_watchlist_subscriptions(watchlist_id, "mercari")
-    return result.deleted_count > 0
+    return await _run_keyword_mutation(
+        lambda session: _apply_watchlist_delete({"_id": watchlist_id, "owner_id": owner_id}, session=session)
+    )
 
 
 async def upsert_preset_keyword(record: PresetKeywordRecord) -> tuple[PresetKeywordRecord, bool]:
@@ -549,10 +705,33 @@ async def subscribe_keyword(
     *,
     owner_id: str,
     watchlist_id: str,
+    session: Any | None = None,
 ) -> KeywordRegistryRecord:
     """Subscribe a watchlist to a marketplace keyword and return the registry entry."""
     await db_client.ensure_indexes()
 
+    async def mutate(active_session: Any) -> KeywordRegistryRecord:
+        return await _subscribe_keyword(
+            marketplace,
+            keyword,
+            owner_id=owner_id,
+            watchlist_id=watchlist_id,
+            session=active_session,
+        )
+
+    if session is not None:
+        return await mutate(session)
+    return await _run_keyword_mutation(mutate)
+
+
+async def _subscribe_keyword(
+    marketplace: Marketplace,
+    keyword: str,
+    *,
+    owner_id: str,
+    watchlist_id: str,
+    session: Any,
+) -> KeywordRegistryRecord:
     normalized_keyword = normalize_registry_keyword(keyword)
     registry_id = build_registry_id(marketplace, normalized_keyword)
     timestamp = datetime.now(UTC)
@@ -575,14 +754,22 @@ async def subscribe_keyword(
         "$inc": {"subscriber_count": 1},
         "$set": {"updated_at": timestamp},
     }
+    session_kwargs = _session_kwargs(session)
 
     for _ in range(2):
         try:
-            await db_client.keyword_registry.update_one(subscriber_absent_query, update_document, upsert=True)
+            await db_client.keyword_registry.update_one(
+                subscriber_absent_query,
+                update_document,
+                upsert=True,
+                **session_kwargs,
+            )
         except DuplicateKeyError:
-            await db_client.keyword_registry.update_one(subscriber_absent_query, update_document)
+            if not getattr(session, "emulated", False):
+                raise
+            await db_client.keyword_registry.update_one(subscriber_absent_query, update_document, **session_kwargs)
 
-        document = await db_client.keyword_registry.find_one({"_id": registry_id})
+        document = await db_client.keyword_registry.find_one({"_id": registry_id}, **session_kwargs)
         if document is not None:
             return _document_to_keyword_registry(document)
 
@@ -595,13 +782,38 @@ async def unsubscribe_keyword(
     *,
     owner_id: str,
     watchlist_id: str,
+    session: Any | None = None,
 ) -> None:
     """Unsubscribe a watchlist from a marketplace keyword."""
     await db_client.ensure_indexes()
 
+    async def mutate(active_session: Any) -> None:
+        await _unsubscribe_keyword(
+            marketplace,
+            keyword,
+            owner_id=owner_id,
+            watchlist_id=watchlist_id,
+            session=active_session,
+        )
+
+    if session is not None:
+        await mutate(session)
+        return
+    await _run_keyword_mutation(mutate)
+
+
+async def _unsubscribe_keyword(
+    marketplace: Marketplace,
+    keyword: str,
+    *,
+    owner_id: str,
+    watchlist_id: str,
+    session: Any,
+) -> None:
     normalized_keyword = normalize_registry_keyword(keyword)
     registry_id = build_registry_id(marketplace, normalized_keyword)
     subscriber_document = RegistrySubscriber(owner_id=owner_id, watchlist_id=watchlist_id).to_document()
+    session_kwargs = _session_kwargs(session)
     result = await db_client.keyword_registry.update_one(
         {"_id": registry_id, "subscribers": {"$elemMatch": subscriber_document}},
         {
@@ -609,9 +821,13 @@ async def unsubscribe_keyword(
             "$inc": {"subscriber_count": -1},
             "$set": {"updated_at": datetime.now(UTC)},
         },
+        **session_kwargs,
     )
     if result.matched_count > 0:
-        await db_client.keyword_registry.delete_one({"_id": registry_id, "subscribers": {"$size": 0}})
+        await db_client.keyword_registry.delete_one(
+            {"_id": registry_id, "subscribers": {"$size": 0}},
+            **session_kwargs,
+        )
 
 
 async def sync_watchlist_subscriptions(
@@ -619,46 +835,72 @@ async def sync_watchlist_subscriptions(
     marketplace: Marketplace,
     *,
     previous_keywords: list[str] | None = None,
+    session: Any | None = None,
 ) -> None:
     """Synchronize registry subscriptions for one watchlist."""
     await db_client.ensure_indexes()
 
-    desired_keywords = normalize_keywords(watchlist.keywords) if watchlist.enabled else []
-    desired_keyword_set = set(desired_keywords)
-    if previous_keywords is None:
-        await _remove_watchlist_subscriptions_except(
-            watchlist._id,
-            marketplace,
-            keep_keywords=desired_keyword_set,
-        )
-        previous_keyword_set: set[str] = set()
-    else:
-        previous_keyword_set = set(normalize_keywords(previous_keywords))
+    async def mutate(active_session: Any) -> None:
+        desired_keywords = normalize_keywords(watchlist.keywords) if watchlist.enabled else []
+        desired_keyword_set = set(desired_keywords)
+        if previous_keywords is None:
+            await _remove_watchlist_subscriptions_except(
+                watchlist._id,
+                marketplace,
+                keep_keywords=desired_keyword_set,
+                session=active_session,
+            )
+            previous_keyword_set: set[str] = set()
+        else:
+            previous_keyword_set = set(normalize_keywords(previous_keywords))
 
-    for keyword_to_remove in previous_keyword_set - desired_keyword_set:
-        await unsubscribe_keyword(
-            marketplace,
-            keyword_to_remove,
-            owner_id=watchlist.owner_id,
-            watchlist_id=watchlist._id,
-        )
+        for keyword_to_remove in previous_keyword_set - desired_keyword_set:
+            await unsubscribe_keyword(
+                marketplace,
+                keyword_to_remove,
+                owner_id=watchlist.owner_id,
+                watchlist_id=watchlist._id,
+                session=active_session,
+            )
 
-    for keyword_to_add in desired_keywords:
-        if keyword_to_add in previous_keyword_set:
-            continue
-        await subscribe_keyword(
-            marketplace,
-            keyword_to_add,
-            owner_id=watchlist.owner_id,
-            watchlist_id=watchlist._id,
-        )
+        for keyword_to_add in desired_keywords:
+            if keyword_to_add in previous_keyword_set:
+                continue
+            await subscribe_keyword(
+                marketplace,
+                keyword_to_add,
+                owner_id=watchlist.owner_id,
+                watchlist_id=watchlist._id,
+                session=active_session,
+            )
+
+    if session is not None:
+        await mutate(session)
+        return
+    await _run_keyword_mutation(mutate)
 
 
-async def remove_watchlist_subscriptions(watchlist_id: str, marketplace: Marketplace) -> None:
+async def remove_watchlist_subscriptions(
+    watchlist_id: str,
+    marketplace: Marketplace,
+    *,
+    session: Any | None = None,
+) -> None:
     """Remove a watchlist from every registry entry for a marketplace."""
     await db_client.ensure_indexes()
 
-    await _remove_watchlist_subscriptions_except(watchlist_id, marketplace, keep_keywords=set())
+    async def mutate(active_session: Any) -> None:
+        await _remove_watchlist_subscriptions_except(
+            watchlist_id,
+            marketplace,
+            keep_keywords=set(),
+            session=active_session,
+        )
+
+    if session is not None:
+        await mutate(session)
+        return
+    await _run_keyword_mutation(mutate)
 
 
 async def get_registry_entry(marketplace: Marketplace, keyword: str) -> KeywordRegistryRecord | None:
@@ -849,9 +1091,11 @@ async def list_destinations_for_owner(owner_id: str) -> list[DestinationRecord]:
     """Return all destinations owned by a tenant."""
     await db_client.ensure_indexes()
 
-    documents = await db_client.destinations.find({"owner_id": owner_id}).sort(
-        [("created_at", ASCENDING), ("_id", ASCENDING)]
-    ).to_list(length=None)
+    documents = (
+        await db_client.destinations.find({"owner_id": owner_id})
+        .sort([("created_at", ASCENDING), ("_id", ASCENDING)])
+        .to_list(length=None)
+    )
     return [_document_to_destination(document) for document in documents]
 
 
@@ -1140,9 +1384,9 @@ async def list_recent_alert_deliveries_for_owner(
             {"created_at": cursor_timestamp, "_id": {"$lt": before_id}},
         ]
 
-    documents = await db_client.alerts.find(query).sort(
-        [("created_at", DESCENDING), ("_id", DESCENDING)]
-    ).to_list(length=limit)
+    documents = (
+        await db_client.alerts.find(query).sort([("created_at", DESCENDING), ("_id", DESCENDING)]).to_list(length=limit)
+    )
     return [_document_to_alert_delivery(document) for document in documents]
 
 
@@ -1235,9 +1479,11 @@ async def _remove_watchlist_subscriptions_except(
     marketplace: Marketplace,
     *,
     keep_keywords: set[str],
+    session: Any | None = None,
 ) -> None:
     documents = await db_client.keyword_registry.find(
-        {"marketplace": marketplace, "subscribers.watchlist_id": watchlist_id}
+        {"marketplace": marketplace, "subscribers.watchlist_id": watchlist_id},
+        **_session_kwargs(session),
     ).to_list(length=None)
     for document in documents:
         keyword = document["keyword"]
@@ -1251,6 +1497,7 @@ async def _remove_watchlist_subscriptions_except(
                 keyword,
                 owner_id=subscriber["owner_id"],
                 watchlist_id=watchlist_id,
+                session=session,
             )
 
 
