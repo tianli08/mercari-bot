@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     auth_cookie_name: str = Field(default="mercari_session", pattern=r"^[A-Za-z0-9_-]{1,64}$")
     auth_cookie_secure: bool = False
     auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    # Keyword cap: read only through ``resolve_tenant_limits`` (see src/limits.py).
+    max_keywords_per_user: int = Field(default=100, ge=1, le=10000)
+    max_keywords_per_request: int = Field(default=50, ge=1, le=10000)
+    # Auth limiter knobs are global, not per-tenant; plan 3.5.4 reads them directly.
+    auth_rate_limit_attempts: int = Field(default=10, ge=1, le=10000)
+    auth_rate_limit_window_seconds: int = Field(default=60, ge=1, le=86400)
     marketplace_db_name: str | None = None
     listings_collection_name: str | None = None
     alerts_collection_name: str | None = None
@@ -122,6 +128,13 @@ class Settings(BaseSettings):
             raise ValueError("AUTH_COOKIE_SECURE must be enabled in production")
         if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure:
             raise ValueError("SameSite=None authentication cookies must be Secure")
+        return self
+
+    @model_validator(mode="after")
+    def validate_limit_settings(self) -> "Settings":
+        """Reject request-shape bounds that the per-user keyword cap could never admit."""
+        if self.max_keywords_per_request > self.max_keywords_per_user:
+            raise ValueError("MAX_KEYWORDS_PER_REQUEST must be less than or equal to MAX_KEYWORDS_PER_USER")
         return self
 
     @property
