@@ -13,13 +13,55 @@ from api_resource_helpers import (
     create_destination,
     signup,
 )
+from httpx import Response
 
 from src import database
 from src.api.app import create_app
-from src.destinations import DestinationRecord
+from src.destinations import DestinationRecord, decrypt_webhook_url
 from src.webhook_errors import WebhookPermanentError, WebhookTransientError
 
 pytestmark = pytest.mark.asyncio
+
+_INVALID_WEBHOOK_ERROR = {"detail": "Invalid webhook URL", "code": "invalid_webhook_url"}
+_INVALID_WEBHOOK_URLS = [
+    pytest.param(
+        "http://discord.com/api/webhooks/123456789/http-secret-token",
+        id="non_https",
+    ),
+    pytest.param(
+        "https://evil.example.com/api/webhooks/123456789/host-secret-token",
+        id="non_discord_host",
+    ),
+    pytest.param(
+        "https://discord.com:8443/api/webhooks/123456789/port-secret-token",
+        id="port_in_authority",
+    ),
+    pytest.param(
+        "https://user:pass@discord.com/api/webhooks/123456789/userinfo-secret-token",
+        id="userinfo_in_authority",
+    ),
+    pytest.param(
+        "https://discord.com/api/webhooks/123456789/query-secret-token?wait=true",
+        id="query_string",
+    ),
+    pytest.param(
+        "https://discord.com/api/webhooks/123456789/fragment-secret-token#frag",
+        id="fragment",
+    ),
+    pytest.param(
+        "https://discord.com/api/webhooks/not-digits/path-secret-token",
+        id="malformed_path",
+    ),
+]
+
+
+def _assert_invalid_webhook_response(response: Response, webhook_url: str) -> None:
+    """Reject with a static 422 and never echo the submitted secret."""
+    assert response.status_code == 422
+    assert response.json() == _INVALID_WEBHOOK_ERROR
+    assert webhook_url not in response.text
+    secret = webhook_url.rsplit("/", 1)[-1].split("?", 1)[0].split("#", 1)[0]
+    assert secret not in response.text
 
 
 @pytest.fixture
@@ -80,6 +122,96 @@ async def test_destination_crud_redacts_secrets_and_enforces_references(
         assert (await client.delete(f"/api/v1/watchlists/{watchlist.json()['id']}")).status_code == 204
         assert (await client.delete(f"/api/v1/destinations/{created['id']}")).status_code == 204
         assert (await client.delete(f"/api/v1/destinations/{created['id']}")).status_code == 404
+
+
+@pytest.mark.parametrize("webhook_url", _INVALID_WEBHOOK_URLS)
+async def test_create_rejects_invalid_webhook_url_classes(
+    api_database: ApiResourceDatabase,
+    webhook_url: str,
+) -> None:
+    """Each invalid URL class is rejected on create and stores no destination."""
+    application = create_app()
+    async with client_for(application) as client:
+        await signup(client, "invalid-create@example.com")
+        response = await client.post(
+            "/api/v1/destinations",
+            json={"label": "Rejected", "webhook_url": webhook_url},
+        )
+        listed = await client.get("/api/v1/destinations")
+
+    _assert_invalid_webhook_response(response, webhook_url)
+    assert listed.json() == []
+    assert await api_database.destinations.count_documents({}) == 0
+
+
+@pytest.mark.parametrize("webhook_url", _INVALID_WEBHOOK_URLS)
+async def test_update_rejects_invalid_webhook_url_classes(
+    api_database: ApiResourceDatabase,
+    webhook_url: str,
+) -> None:
+    """Each invalid URL class is rejected on update and leaves the stored secret unchanged."""
+    application = create_app()
+    async with client_for(application) as client:
+        await signup(client, "invalid-update@example.com")
+        destination = await create_destination(client)
+        response = await client.patch(
+            f"/api/v1/destinations/{destination['id']}",
+            json={"webhook_url": webhook_url},
+        )
+        fetched = await client.get(f"/api/v1/destinations/{destination['id']}")
+
+    _assert_invalid_webhook_response(response, webhook_url)
+    assert fetched.status_code == 200
+    stored = await api_database.destinations.find_one({"_id": destination["id"]})
+    assert stored is not None
+    assert decrypt_webhook_url(stored["webhook_url_encrypted"]) == WEBHOOK_URL
+
+
+async def test_replacing_webhook_url_clears_verification_until_reverified(
+    api_database: ApiResourceDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replacing a webhook URL clears verified_at until verify succeeds again."""
+    from src.webhook_delivery import DiscordWebhookVerifier
+
+    async def verify(
+        _: object,
+        destination: DestinationRecord,
+        owner_id: str,
+    ) -> object:
+        return await database.mark_destination_verified_for_owner(
+            destination._id,
+            owner_id,
+            datetime(2025, 1, 1, tzinfo=UTC),
+        )
+
+    monkeypatch.setattr(DiscordWebhookVerifier, "__call__", verify)
+    replacement_url = "https://discord.com/api/webhooks/987654321/replacement-secret-token"
+    application = create_app()
+    async with client_for(application) as client:
+        await signup(client, "reverify@example.com")
+        destination = await create_destination(client)
+        verified = await client.post(f"/api/v1/destinations/{destination['id']}/verify")
+        assert verified.status_code == 200
+        assert verified.json()["verified_at"].startswith("2025-01-01T00:00:00")
+
+        replaced = await client.patch(
+            f"/api/v1/destinations/{destination['id']}",
+            json={"webhook_url": replacement_url},
+        )
+        fetched = await client.get(f"/api/v1/destinations/{destination['id']}")
+        assert replaced.status_code == fetched.status_code == 200
+        assert replaced.json()["verified_at"] is None
+        assert fetched.json()["verified_at"] is None
+        assert "replacement-secret-token" not in replaced.text
+        stored = await api_database.destinations.find_one({"_id": destination["id"]})
+        assert stored is not None
+        assert stored["verified_at"] is None
+        assert decrypt_webhook_url(stored["webhook_url_encrypted"]) == replacement_url
+
+        reverified = await client.post(f"/api/v1/destinations/{destination['id']}/verify")
+        assert reverified.status_code == 200
+        assert reverified.json()["verified_at"].startswith("2025-01-01T00:00:00")
 
 
 async def test_destination_verification_uses_owned_boundary_and_creates_no_alert(
