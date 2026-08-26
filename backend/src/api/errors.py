@@ -20,7 +20,7 @@ from ..presets import PresetNotFoundError
 from ..users import EmailAlreadyExistsError
 from ..watchlists import WatchlistNameExistsError, WatchlistNotFoundError
 from ..webhook_errors import WebhookDeliveryError, WebhookPermanentError, WebhookTransientError
-from .auth.exceptions import AuthenticationRequiredError, InvalidCredentialsError
+from .auth.exceptions import AuthenticationRequiredError, InvalidCredentialsError, RateLimitedError
 from .schemas import ErrorResponse
 
 _logger = get_logger("api")
@@ -86,6 +86,15 @@ def register_exception_handlers(app: FastAPI) -> None:
         _build_error_handler(502, "Webhook verification failed", "webhook_verification_failed"),
     )
     app.add_exception_handler(
+        RateLimitedError,
+        _build_error_handler(
+            429,
+            "Too many requests",
+            "rate_limited",
+            header_factory=_retry_after_headers,
+        ),
+    )
+    app.add_exception_handler(
         InvalidCredentialsError,
         _build_error_handler(401, "Invalid email or password", "invalid_credentials"),
     )
@@ -104,11 +113,28 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
 
-def _build_error_handler(status_code: int, detail: str, code: str) -> _ErrorHandler:
-    async def handler(_: Request, __: Exception) -> JSONResponse:
-        return _error_response(status_code, detail, code)
+def _build_error_handler(
+    status_code: int,
+    detail: str,
+    code: str,
+    *,
+    header_factory: Callable[[Exception], dict[str, str]] | None = None,
+) -> _ErrorHandler:
+    async def handler(_: Request, exc: Exception) -> JSONResponse:
+        headers = header_factory(exc) if header_factory is not None else None
+        return _error_response(status_code, detail, code, headers=headers)
 
     return handler
+
+
+def _retry_after_headers(exc: Exception) -> dict[str, str]:
+    """Build the Retry-After header required by auth rate-limit responses."""
+    retry_after = getattr(exc, "retry_after_seconds", 1)
+    try:
+        seconds = max(1, int(retry_after))
+    except (TypeError, ValueError):
+        seconds = 1
+    return {"Retry-After": str(seconds)}
 
 
 async def _unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:
@@ -120,6 +146,13 @@ async def _unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespon
     return _error_response(500, "Internal server error", "internal_error")
 
 
-def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
+def _error_response(
+    status_code: int,
+    detail: str,
+    code: str,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     body = ErrorResponse(detail=detail, code=code)
-    return JSONResponse(status_code=status_code, content=body.model_dump())
+    if headers is None:
+        return JSONResponse(status_code=status_code, content=body.model_dump())
+    return JSONResponse(status_code=status_code, content=body.model_dump(), headers=headers)

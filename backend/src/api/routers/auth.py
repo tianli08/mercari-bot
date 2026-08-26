@@ -12,6 +12,7 @@ from ...users import UserStatus
 from ..auth.context import require_tenant_id
 from ..auth.cookies import clear_authentication_cookie, set_authentication_cookie
 from ..auth.exceptions import AuthenticationRequiredError, InvalidCredentialsError
+from ..auth.rate_limit import enforce_login_rate_limit, enforce_signup_rate_limit
 from ..auth.schemas import LoginRequest, PublicUser, SignupRequest
 from ..auth.security import (
     DUMMY_PASSWORD_HASH,
@@ -23,7 +24,12 @@ from ..auth.security import (
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
-@router.post("/signup", response_model=PublicUser, status_code=201)
+@router.post(
+    "/signup",
+    response_model=PublicUser,
+    status_code=201,
+    dependencies=[Depends(enforce_signup_rate_limit)],
+)
 async def signup(payload: SignupRequest, response: Response) -> PublicUser:
     """Create an active tenant and establish its browser session."""
     password_hash = await run_in_threadpool(hash_password, payload.password)
@@ -32,7 +38,11 @@ async def signup(payload: SignupRequest, response: Response) -> PublicUser:
     return PublicUser.from_record(user)
 
 
-@router.post("/login", response_model=PublicUser)
+@router.post(
+    "/login",
+    response_model=PublicUser,
+    dependencies=[Depends(enforce_login_rate_limit)],
+)
 async def login(payload: LoginRequest, response: Response) -> PublicUser:
     """Verify active-account credentials and establish a browser session."""
     user = await database.get_user_by_email(str(payload.email))

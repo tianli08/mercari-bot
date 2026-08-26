@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src import database  # noqa: E402
 from src.api.app import create_app  # noqa: E402
 from src.api.auth.context import require_tenant_id  # noqa: E402
+from src.api.auth.exceptions import RateLimitedError  # noqa: E402
+from src.api.auth.rate_limit import get_auth_rate_limiter, reset_auth_rate_limiter  # noqa: E402
 from src.api.auth.security import create_access_token, hash_password  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.users import UserStatus  # noqa: E402
@@ -26,6 +28,7 @@ from src.users import UserStatus  # noqa: E402
 pytestmark = pytest.mark.asyncio
 
 PASSWORD = "correct horse battery staple"
+_RATE_LIMITED = {"detail": "Too many requests", "code": "rate_limited"}
 
 
 class FakeDatabaseClient:
@@ -47,6 +50,48 @@ class FakeDatabaseClient:
     async def ensure_indexes(self) -> None:
         """Create the same indexes as the production database client."""
         await database.DatabaseClient.ensure_indexes(self)
+
+
+class _FakeClock:
+    """Monotonic clock that tests can advance without sleeping."""
+
+    def __init__(self, now: float = 1_000.0) -> None:
+        """Start the clock at an arbitrary monotonic timestamp."""
+        self.now = now
+
+    def __call__(self) -> float:
+        """Return the current fake timestamp."""
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        """Move the clock forward by ``seconds``."""
+        self.now += seconds
+
+
+@pytest.fixture
+def tiny_auth_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shrink the auth budget so exhaustion is cheap to prove."""
+    monkeypatch.setattr(settings, "auth_rate_limit_attempts", 2)
+    monkeypatch.setattr(settings, "auth_rate_limit_window_seconds", 60)
+
+
+@pytest.fixture
+def fast_passwords(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
+    """Replace Argon2 with instant fakes that record whether hashing ran."""
+    hashed: list[str] = []
+    verified: list[str] = []
+
+    def _hash_password(password: str) -> str:
+        hashed.append(password)
+        return f"hashed:{password}"
+
+    def _verify_password(plain: str, stored: str) -> bool:
+        verified.append(plain)
+        return stored == f"hashed:{plain}"
+
+    monkeypatch.setattr("src.api.routers.auth.hash_password", _hash_password)
+    monkeypatch.setattr("src.api.routers.auth.verify_password", _verify_password)
+    return {"hash": hashed, "verify": verified}
 
 
 @pytest.fixture
@@ -353,13 +398,307 @@ async def test_auth_validation_error_does_not_echo_password(
     assert submitted_password not in caplog.text
 
 
+async def test_rate_limited_error_sets_retry_after_header(fake_database: FakeDatabaseClient) -> None:
+    """429 responses use the public envelope and a positive integer Retry-After header."""
+    application = create_app()
+
+    @application.get("/api/v1/test-rate-limited")
+    async def raise_limited() -> None:
+        raise RateLimitedError(7)
+
+    async with _client_for(application) as client:
+        response = await client.get("/api/v1/test-rate-limited")
+
+    assert response.status_code == 429
+    assert response.json() == _RATE_LIMITED
+    assert response.headers["retry-after"] == "7"
+
+
+async def test_signup_burst_returns_rate_limited_before_hashing(
+    fake_database: FakeDatabaseClient,
+    tiny_auth_limits: None,
+    fast_passwords: dict[str, list[str]],
+) -> None:
+    """Sustained signup from one IP is rejected with 429 and does not hash the extra attempt."""
+    application = create_app()
+
+    async with _client_for(application) as client:
+        for index in range(2):
+            response = await client.post(
+                "/api/v1/auth/signup",
+                json={"email": f"burst{index}@example.com", "password": PASSWORD},
+            )
+            assert response.status_code == 201
+        limited = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": "burst2@example.com", "password": PASSWORD},
+        )
+
+    _assert_rate_limited(limited, "burst2@example.com", PASSWORD)
+    assert len(fast_passwords["hash"]) == 2
+    assert await fake_database.users.count_documents({}) == 2
+
+
+async def test_login_burst_is_identical_for_existing_and_unknown_emails(
+    fake_database: FakeDatabaseClient,
+    tiny_auth_limits: None,
+    fast_passwords: dict[str, list[str]],
+) -> None:
+    """A spent login budget is not an account-existence oracle."""
+    await database.create_user("known@example.com", f"hashed:{PASSWORD}")
+    application = create_app()
+    known_email = "known@example.com"
+    unknown_email = "unknown@example.com"
+
+    async with _client_for(application, client_host="203.0.113.10") as known_client:
+        await known_client.post("/api/v1/auth/login", json={"email": known_email, "password": "wrong password!!"})
+        await known_client.post("/api/v1/auth/login", json={"email": known_email, "password": "wrong password!!"})
+        known_limited = await known_client.post(
+            "/api/v1/auth/login",
+            json={"email": known_email, "password": "wrong password!!"},
+        )
+    async with _client_for(application, client_host="203.0.113.11") as unknown_client:
+        await unknown_client.post(
+            "/api/v1/auth/login",
+            json={"email": unknown_email, "password": "wrong password!!"},
+        )
+        await unknown_client.post(
+            "/api/v1/auth/login",
+            json={"email": unknown_email, "password": "wrong password!!"},
+        )
+        unknown_limited = await unknown_client.post(
+            "/api/v1/auth/login",
+            json={"email": unknown_email, "password": "wrong password!!"},
+        )
+
+    _assert_rate_limited(known_limited, known_email, unknown_email, PASSWORD, "wrong password!!")
+    _assert_rate_limited(unknown_limited, known_email, unknown_email, PASSWORD, "wrong password!!")
+    assert known_limited.json() == unknown_limited.json()
+
+
+async def test_login_rate_limit_keys_are_independent(
+    fake_database: FakeDatabaseClient,
+    tiny_auth_limits: None,
+    fast_passwords: dict[str, list[str]],
+) -> None:
+    """Spending one login email or IP budget does not throttle a different email from a different IP."""
+    application = create_app()
+
+    async with _client_for(application, client_host="198.51.100.1") as victim_client:
+        await victim_client.post(
+            "/api/v1/auth/login",
+            json={"email": "victim@example.com", "password": PASSWORD},
+        )
+        await victim_client.post(
+            "/api/v1/auth/login",
+            json={"email": "victim@example.com", "password": PASSWORD},
+        )
+        victim_limited = await victim_client.post(
+            "/api/v1/auth/login",
+            json={"email": "victim@example.com", "password": PASSWORD},
+        )
+        other_email_same_ip = await victim_client.post(
+            "/api/v1/auth/login",
+            json={"email": "other@example.com", "password": PASSWORD},
+        )
+    async with _client_for(application, client_host="198.51.100.2") as other_client:
+        other_email_other_ip = await other_client.post(
+            "/api/v1/auth/login",
+            json={"email": "other@example.com", "password": PASSWORD},
+        )
+        same_email_other_ip = await other_client.post(
+            "/api/v1/auth/login",
+            json={"email": "victim@example.com", "password": PASSWORD},
+        )
+
+    _assert_rate_limited(victim_limited, "victim@example.com")
+    _assert_rate_limited(other_email_same_ip, "other@example.com")
+    assert other_email_other_ip.status_code == 401
+    _assert_rate_limited(same_email_other_ip, "victim@example.com")
+
+
+async def test_signup_and_login_budgets_are_independent(
+    fake_database: FakeDatabaseClient,
+    tiny_auth_limits: None,
+    fast_passwords: dict[str, list[str]],
+) -> None:
+    """Spending the signup IP budget does not consume the login budgets, and vice versa."""
+    application = create_app()
+
+    async with _client_for(application, client_host="192.0.2.10") as client:
+        await client.post("/api/v1/auth/signup", json={"email": "one@example.com", "password": PASSWORD})
+        await client.post("/api/v1/auth/signup", json={"email": "two@example.com", "password": PASSWORD})
+        signup_limited = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": "three@example.com", "password": PASSWORD},
+        )
+        login = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "one@example.com", "password": PASSWORD},
+        )
+
+    _assert_rate_limited(signup_limited, "three@example.com")
+    assert login.status_code == 200
+
+    reset_auth_rate_limiter()
+    async with _client_for(application, client_host="192.0.2.11") as client:
+        await client.post("/api/v1/auth/login", json={"email": "burn@example.com", "password": PASSWORD})
+        await client.post("/api/v1/auth/login", json={"email": "burn@example.com", "password": PASSWORD})
+        login_limited = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "burn@example.com", "password": PASSWORD},
+        )
+        signup = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": "fresh@example.com", "password": PASSWORD},
+        )
+
+    _assert_rate_limited(login_limited, "burn@example.com")
+    assert signup.status_code == 201
+
+
+async def test_signup_rate_limit_is_per_ip(
+    fake_database: FakeDatabaseClient,
+    tiny_auth_limits: None,
+    fast_passwords: dict[str, list[str]],
+) -> None:
+    """A second client IP keeps a full signup budget after the first IP is exhausted."""
+    application = create_app()
+
+    async with _client_for(application, client_host="192.0.2.20") as first:
+        await first.post("/api/v1/auth/signup", json={"email": "ip-a@example.com", "password": PASSWORD})
+        await first.post("/api/v1/auth/signup", json={"email": "ip-b@example.com", "password": PASSWORD})
+        limited = await first.post(
+            "/api/v1/auth/signup",
+            json={"email": "ip-c@example.com", "password": PASSWORD},
+        )
+    async with _client_for(application, client_host="192.0.2.21") as second:
+        allowed = await second.post(
+            "/api/v1/auth/signup",
+            json={"email": "ip-d@example.com", "password": PASSWORD},
+        )
+
+    _assert_rate_limited(limited, "ip-c@example.com")
+    assert allowed.status_code == 201
+
+
+async def test_auth_rate_limit_recovers_after_window_without_sleeping(
+    fake_database: FakeDatabaseClient,
+    tiny_auth_limits: None,
+    fast_passwords: dict[str, list[str]],
+) -> None:
+    """Advancing the limiter clock restores signup after the window elapses."""
+    clock = _FakeClock()
+    get_auth_rate_limiter().set_clock(clock)
+    application = create_app()
+
+    async with _client_for(application) as client:
+        await client.post("/api/v1/auth/signup", json={"email": "window0@example.com", "password": PASSWORD})
+        await client.post("/api/v1/auth/signup", json={"email": "window1@example.com", "password": PASSWORD})
+        limited = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": "window2@example.com", "password": PASSWORD},
+        )
+        clock.advance(settings.auth_rate_limit_window_seconds + 0.01)
+        recovered = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": "window3@example.com", "password": PASSWORD},
+        )
+
+    _assert_rate_limited(limited, "window2@example.com")
+    assert recovered.status_code == 201
+
+
+async def test_limiter_reset_restores_auth_access(
+    fake_database: FakeDatabaseClient,
+    tiny_auth_limits: None,
+    fast_passwords: dict[str, list[str]],
+) -> None:
+    """Tests can reset the in-process limiter instead of waiting on wall-clock time."""
+    application = create_app()
+
+    async with _client_for(application) as client:
+        await client.post("/api/v1/auth/signup", json={"email": "reset0@example.com", "password": PASSWORD})
+        await client.post("/api/v1/auth/signup", json={"email": "reset1@example.com", "password": PASSWORD})
+        reset_auth_rate_limiter()
+        recovered = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": "reset2@example.com", "password": PASSWORD},
+        )
+
+    assert recovered.status_code == 201
+
+
+async def test_login_rate_limit_does_not_run_password_verification(
+    fake_database: FakeDatabaseClient,
+    tiny_auth_limits: None,
+    fast_passwords: dict[str, list[str]],
+) -> None:
+    """Rejected login attempts never reach Argon2 verification."""
+    await database.create_user("hash@example.com", f"hashed:{PASSWORD}")
+    application = create_app()
+
+    async with _client_for(application) as client:
+        await client.post("/api/v1/auth/login", json={"email": "hash@example.com", "password": PASSWORD})
+        await client.post("/api/v1/auth/login", json={"email": "hash@example.com", "password": PASSWORD})
+        verify_count = len(fast_passwords["verify"])
+        limited = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "hash@example.com", "password": PASSWORD},
+        )
+
+    _assert_rate_limited(limited, "hash@example.com")
+    assert len(fast_passwords["verify"]) == verify_count
+
+
+async def test_logout_and_me_are_not_covered_by_the_auth_limiter(
+    fake_database: FakeDatabaseClient,
+    tiny_auth_limits: None,
+    fast_passwords: dict[str, list[str]],
+) -> None:
+    """Spending the login budget does not throttle session logout or /me."""
+    application = create_app()
+
+    async with _client_for(application) as client:
+        signup = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": "session@example.com", "password": PASSWORD},
+        )
+        assert signup.status_code == 201
+        await client.post("/api/v1/auth/login", json={"email": "session@example.com", "password": PASSWORD})
+        await client.post("/api/v1/auth/login", json={"email": "session@example.com", "password": PASSWORD})
+        limited = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "session@example.com", "password": PASSWORD},
+        )
+        me_response = await client.get("/api/v1/auth/me")
+        logout_response = await client.post("/api/v1/auth/logout")
+
+    _assert_rate_limited(limited, "session@example.com")
+    assert me_response.status_code == 200
+    assert me_response.json()["email"] == "session@example.com"
+    assert logout_response.status_code == 204
+
+
+def _assert_rate_limited(response: httpx.Response, *secrets: str) -> None:
+    """Require the frozen 429 contract and the absence of caller-supplied secrets."""
+    assert response.status_code == 429
+    assert response.json() == _RATE_LIMITED
+    retry_after = response.headers["retry-after"]
+    assert retry_after.isdigit()
+    assert int(retry_after) >= 1
+    for secret in secrets:
+        assert secret not in response.text
+
+
 def _client_for(
     application: object,
     *,
     base_url: str = "http://test",
     cookies: dict[str, str] | None = None,
+    client_host: str = "127.0.0.1",
 ) -> httpx.AsyncClient:
-    transport = httpx.ASGITransport(app=application)
+    transport = httpx.ASGITransport(app=application, client=(client_host, 123))
     return httpx.AsyncClient(
         transport=transport,
         base_url=base_url,
