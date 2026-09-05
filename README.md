@@ -15,4 +15,14 @@ uv run uvicorn src.api.app:app --reload
 uv run python -m src.api_main
 ```
 
-## Currently INFRA and WEB are being developed.
+The web app lives in `web/` (Node 22, npm). API-dependent behavior expects the backend running above.
+
+```bash
+cd web
+cp .env.example .env.local   # NEXT_PUBLIC_API_BASE_URL; default is the local API
+npm install
+npm run dev                  # http://localhost:3000
+npm run build                # production build
+```
+
+## Currently INFRA is being developed.
