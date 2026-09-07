@@ -1,5 +1,17 @@
 import Link from "next/link";
 
+import {
+  HERO_COPY,
+  HOW_IT_WORKS_HREF,
+  PRESET_DESIGNER_NAMES,
+  PRESETS_COPY,
+  PRICING_COPY,
+  PRODUCT_NAME,
+  SIGNUP_CTA_COPY,
+  SIGNUP_HREF,
+  WHAT_IT_DOES_COPY,
+} from "@/lib/marketing-content";
+
 export function LandingPage() {
   return (
     <div className="min-h-screen bg-[#0a0a0a] font-mono text-[#f0f0f0] selection:bg-[#f0f0f0] selection:text-[#0a0a0a]">
@@ -21,13 +33,13 @@ function Header() {
     <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#222222] bg-[#0a0a0a]">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
         <span className="text-xs font-medium uppercase tracking-[0.2em] text-[#f0f0f0]">
-          Static Archive
+          {PRODUCT_NAME}
         </span>
         <Link
-          href="/signup"
+          href={SIGNUP_HREF}
           className="bg-[#f0f0f0] px-4 py-2 text-xs font-medium uppercase tracking-[0.15em] text-[#0a0a0a] transition-colors hover:bg-[#c7c7c7]"
         >
-          Sign up
+          {HERO_COPY.primaryCta}
         </Link>
       </div>
     </header>
@@ -39,21 +51,20 @@ function Hero() {
     <section className="flex min-h-screen flex-col items-center justify-center px-6 pb-16 pt-20">
       <div className="max-w-4xl text-center">
         <h1 className="font-mono text-4xl font-light leading-[1.15] text-[#f0f0f0] md:text-6xl lg:text-7xl">
-          Real-time Mercari Japan alerts for archive and designer fashion,
-          delivered to Discord.
+          {HERO_COPY.valueProposition}
         </h1>
         <div className="mt-12 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
           <Link
-            href="/signup"
+            href={SIGNUP_HREF}
             className="inline-flex items-center justify-center bg-[#f0f0f0] px-8 py-3 text-xs font-medium uppercase tracking-[0.15em] text-[#0a0a0a] transition-colors hover:bg-[#c7c7c7]"
           >
-            Sign up
+            {HERO_COPY.primaryCta}
           </Link>
           <a
-            href="#what-it-does"
+            href={HOW_IT_WORKS_HREF}
             className="inline-flex items-center justify-center border border-[#333333] px-8 py-3 text-xs font-medium uppercase tracking-[0.15em] text-[#f0f0f0] transition-colors hover:bg-[#1a1a1a]"
           >
-            How it works
+            {HERO_COPY.secondaryCta}
           </a>
         </div>
       </div>
@@ -62,29 +73,6 @@ function Hero() {
 }
 
 function WhatItDoes() {
-  const items = [
-    {
-      title: "Keyword watchlists",
-      description:
-        "Watch Mercari Japan with your own keywords. Add optional price and listing-status filters.",
-    },
-    {
-      title: "Shared scraping, personal delivery",
-      description:
-        "Each unique keyword is scraped once. Matching listings fan out to every account watching it.",
-    },
-    {
-      title: "Discord webhook alerts",
-      description:
-        "No bot to install. Paste a webhook URL. We run the scraper; you do not install a bot or host anything locally.",
-    },
-    {
-      title: "Preset designer catalogs",
-      description:
-        "Start from curated designer presets instead of building every watchlist from scratch.",
-    },
-  ];
-
   return (
     <section
       id="what-it-does"
@@ -92,10 +80,10 @@ function WhatItDoes() {
     >
       <div className="mx-auto max-w-5xl">
         <h2 className="font-mono text-3xl font-light text-[#f0f0f0] md:text-4xl">
-          What it does
+          {WHAT_IT_DOES_COPY.heading}
         </h2>
         <div className="mt-16 grid grid-cols-1 gap-12 md:grid-cols-2">
-          {items.map((item, index) => (
+          {WHAT_IT_DOES_COPY.features.map((item, index) => (
             <div key={item.title} className="flex gap-6">
               <span className="text-sm text-[#737373]">0{index + 1}</span>
               <div>
@@ -115,29 +103,6 @@ function WhatItDoes() {
 }
 
 function Presets() {
-  const presets = [
-    "Mihara Yasuhiro",
-    "Carol Christian Poell",
-    "TheSoloist",
-    "14th Addiction",
-    "Rick Owens",
-    "Ann Demeulemeester",
-    "Attachment",
-    "Boris Bidjan Saberi",
-    "Dior Homme",
-    "Isamu Katayama Backlash",
-    "Julius_7",
-    "Kapital",
-    "Lad Musician",
-    "Maison Margiela",
-    "Number (N)ine",
-    "Saint Laurent Paris",
-    "Tornado Mart",
-    "Undercover",
-    "A&G Rock n Roll Couture",
-    "Raf Simons",
-  ];
-
   return (
     <section
       id="presets"
@@ -145,13 +110,13 @@ function Presets() {
     >
       <div className="mx-auto max-w-6xl">
         <h2 className="font-mono text-3xl font-light text-[#f0f0f0] md:text-4xl">
-          Curated designer presets, ready to watch.
+          {PRESETS_COPY.heading}
         </h2>
         <p className="mt-4 text-sm text-[#737373]">
-          Add any of these catalogs to a watchlist.
+          {PRESETS_COPY.supportingLine}
         </p>
         <div className="mt-16 grid grid-cols-1 gap-px border border-[#222222] bg-[#222222] sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {presets.map((name) => (
+          {PRESET_DESIGNER_NAMES.map((name) => (
             <div
               key={name}
               className="break-words bg-[#0a0a0a] px-6 py-5 text-sm text-[#a3a3a3] transition-colors hover:bg-[#141414] hover:text-[#f0f0f0]"
@@ -166,14 +131,6 @@ function Presets() {
 }
 
 function Pricing() {
-  const included = [
-    "Hosted Mercari Japan monitoring",
-    "Keyword watchlists with price and listing-status filters",
-    "Discord webhook alerts (no bot to install)",
-    "Curated designer presets",
-    "Up to 100 keywords per account",
-  ];
-
   return (
     <section
       id="pricing"
@@ -181,14 +138,14 @@ function Pricing() {
     >
       <div className="mx-auto max-w-5xl">
         <h2 className="font-mono text-3xl font-light text-[#f0f0f0] md:text-4xl">
-          Pricing
+          {PRICING_COPY.heading}
         </h2>
         <div className="mt-12 max-w-md border border-[#222222] p-8">
           <h3 className="text-sm font-medium uppercase tracking-[0.15em] text-[#f0f0f0]">
-            Free beta
+            {PRICING_COPY.tierName}
           </h3>
           <ul className="mt-8 space-y-4">
-            {included.map((item) => (
+            {PRICING_COPY.included.map((item) => (
               <li
                 key={item}
                 className="flex items-start gap-3 text-sm text-[#a3a3a3]"
@@ -199,10 +156,10 @@ function Pricing() {
             ))}
           </ul>
           <Link
-            href="/signup"
+            href={SIGNUP_HREF}
             className="mt-10 inline-flex w-full items-center justify-center bg-[#f0f0f0] px-6 py-3 text-xs font-medium uppercase tracking-[0.15em] text-[#0a0a0a] transition-colors hover:bg-[#c7c7c7]"
           >
-            Sign up
+            {PRICING_COPY.cta}
           </Link>
         </div>
       </div>
@@ -218,16 +175,16 @@ function SignUpCTA() {
     >
       <div className="mx-auto max-w-3xl text-center">
         <h2 className="font-mono text-3xl font-light text-[#f0f0f0] md:text-4xl">
-          Start watching Mercari Japan.
+          {SIGNUP_CTA_COPY.heading}
         </h2>
         <p className="mt-4 text-sm text-[#737373]">
-          Create an account and send alerts to your Discord webhook.
+          {SIGNUP_CTA_COPY.supportingLine}
         </p>
         <Link
-          href="/signup"
+          href={SIGNUP_HREF}
           className="mt-10 inline-flex items-center justify-center bg-[#f0f0f0] px-8 py-3 text-xs font-medium uppercase tracking-[0.15em] text-[#0a0a0a] transition-colors hover:bg-[#c7c7c7]"
         >
-          Sign up
+          {SIGNUP_CTA_COPY.cta}
         </Link>
       </div>
     </section>
@@ -239,13 +196,13 @@ function Footer() {
     <footer className="border-t border-[#222222] px-6 py-8">
       <div className="mx-auto flex max-w-6xl items-center justify-between">
         <span className="text-xs font-medium uppercase tracking-[0.2em] text-[#f0f0f0]">
-          Static Archive
+          {PRODUCT_NAME}
         </span>
         <Link
-          href="/signup"
+          href={SIGNUP_HREF}
           className="text-xs uppercase tracking-[0.1em] text-[#a3a3a3] transition-colors hover:text-[#f0f0f0]"
         >
-          Sign up
+          {SIGNUP_CTA_COPY.cta}
         </Link>
       </div>
     </footer>
