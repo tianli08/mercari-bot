@@ -105,7 +105,7 @@ function Ledger() {
   return (
     <div
       aria-label="Sample alert feed"
-      className="overflow-x-auto border border-rule px-5 pb-2"
+      className="min-w-0 overflow-x-auto border border-rule px-5 pb-2"
     >
       <table className="w-full min-w-[640px] border-collapse font-mono text-xs">
         <thead>
