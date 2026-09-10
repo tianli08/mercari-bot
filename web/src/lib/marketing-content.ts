@@ -7,7 +7,7 @@ export const PRODUCT_NAME = "Static Archive";
 
 export const HERO_COPY = {
   valueProposition:
-    "Real-time Mercari Japan alerts for archive and designer fashion, delivered to Discord.",
+    "Real-time Mercari Japan alerts for archive fashion, delivered to Discord.",
   primaryCta: "Sign up",
   secondaryCta: "How it works",
   statusLine: "Monitoring Mercari JP",

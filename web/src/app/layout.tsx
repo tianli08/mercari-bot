@@ -17,11 +17,11 @@ const dmMono = DM_Mono({
 export const metadata: Metadata = {
   title: "Static Archive — Real-time Mercari Japan alerts",
   description:
-    "Real-time Mercari Japan alerts for archive and designer fashion, delivered to Discord.",
+    "Real-time Mercari Japan alerts for archive fashion, delivered to Discord.",
   openGraph: {
     title: "Static Archive",
     description:
-      "Real-time Mercari Japan alerts for archive and designer fashion, delivered to Discord.",
+      "Real-time Mercari Japan alerts for archive fashion, delivered to Discord.",
     type: "website",
   },
   twitter: {
