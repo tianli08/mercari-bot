@@ -21,10 +21,15 @@ export const HERO_COPY = {
   footerRight: "係員 CLERK",
   copyLine: "お客様控 CUSTOMER COPY",
   copyNumber: "87",
-  loopLabel: "● 8 FRAMES · 1 RECEIPT EACH · LOOP",
-  stripLabel:
-    "EIGHT RECEIPTS FROM A WEEK IN TOKYO. ONE FRAME PRINTED ON EACH. SCANNED FLAT.",
 } as const;
+
+export function loopLabel(count: number): string {
+  return `● ${count} FRAME${count === 1 ? "" : "S"} · 1 RECEIPT EACH · LOOP`;
+}
+
+export function stripLabel(count: number): string {
+  return `${count} RECEIPT${count === 1 ? "" : "S"} FROM A WEEK IN TOKYO. ONE FRAME PRINTED ON EACH. SCANNED FLAT.`;
+}
 
 export const WHAT_IT_DOES_COPY = {
   heading: "HOW IT WORKS",
@@ -111,8 +116,9 @@ export const FOOTER_COPY = {
   tagline: "MERCARI JP · DISCORD WEBHOOKS",
 } as const;
 
-// The eight recycled receipts the hero loop prints on. Shops are fictional;
-// the frame images are placeholders until real listing photos replace them.
+// Recycled receipts the hero loop prints on. Shops are fictional. Frame images
+// come from whatever is in public/frames (see lib/receipt-frames.ts); each
+// image is paired with the next template here, cycling as needed.
 export type PaperTint = "white" | "grey" | "pink";
 
 export interface ReceiptFrame {
@@ -132,13 +138,15 @@ export interface ReceiptFrame {
   offset: number;
 }
 
-export const RECEIPT_FRAMES: readonly ReceiptFrame[] = [
-  { image: "/frames/jacket-01.jpg", tint: "white", shop: "サイゼリヤ 渋谷店", address: "東京都渋谷区道玄坂2-6-17", datetime: "2026年08月14日(木) 21:07", register: "レジ#2 No.1749", items: [["ミラノ風ドリア", "¥300"], ["ドリンクバー", "¥200"], ["小エビのサラダ", "¥350"]], total: "¥850", tax: "¥68", member: "************1749", approval: "449318", slip: "250-626-278-1810", offset: -40 },
-  { image: "/frames/jacket-02.jpg", tint: "pink", shop: "STATIC STORE 下北沢", address: "世田谷区北沢2-25-8", datetime: "2026年08月15日(金) 13:42", register: "レジ#1 No.1762", items: [["古着 ジャケット", "¥6,800"], ["ハンガー", "¥110"]], total: "¥6,910", tax: "¥552", member: "************1750", approval: "449325", slip: "250-626-279-1810", offset: -3 },
-  { image: "/frames/jacket-03.jpg", tint: "grey", shop: "ローソン 新宿三丁目", address: "新宿区新宿3-17-5", datetime: "2026年08月15日(金) 18:20", register: "レジ#2 No.1775", items: [["からあげクン", "¥238"], ["緑茶 525ml", "¥140"], ["レジ袋", "¥5"]], total: "¥383", tax: "¥30", member: "************1751", approval: "449332", slip: "250-626-280-1810", offset: 34 },
-  { image: "/frames/jacket-04.jpg", tint: "white", shop: "古着屋 セカンド 高円寺", address: "杉並区高円寺南4-27", datetime: "2026年08月16日(土) 15:03", register: "レジ#1 No.1788", items: [["デニム 中古", "¥12,000"], ["ベルト", "¥1,500"]], total: "¥13,500", tax: "¥1,080", member: "************1752", approval: "449339", slip: "250-626-281-1810", offset: -19 },
-  { image: "/frames/jacket-05.jpg", tint: "white", shop: "ユニクロ 原宿店", address: "渋谷区神宮前6-1-9", datetime: "2026年08月16日(土) 19:51", register: "レジ#2 No.1801", items: [["ヒートテック", "¥990"], ["ソックス", "¥390"]], total: "¥1,380", tax: "¥110", member: "************1753", approval: "449346", slip: "250-626-282-1810", offset: 18 },
-  { image: "/frames/jacket-06.jpg", tint: "grey", shop: "ブックオフ 中野店", address: "中野区中野5-52", datetime: "2026年08月17日(日) 11:30", register: "レジ#2 No.1814", items: [["雑誌 バックナンバー", "¥420"], ["写真集", "¥1,980"]], total: "¥2,400", tax: "¥192", member: "************1754", approval: "449353", slip: "250-626-283-1810", offset: -30 },
-  { image: "/frames/jacket-07.jpg", tint: "pink", shop: "STATIC STORE 代官山", address: "渋谷区代官山町17-6", datetime: "2026年08月17日(日) 16:12", register: "レジ#1 No.1827", items: [["スニーカー 中古", "¥28,000"]], total: "¥28,000", tax: "¥2,240", member: "************1755", approval: "449360", slip: "250-626-284-1810", offset: 7 },
-  { image: "/frames/jacket-08.jpg", tint: "white", shop: "セブン-イレブン 池袋東口", address: "豊島区南池袋1-28", datetime: "2026年08月18日(月) 07:55", register: "レジ#2 No.1840", items: [["おにぎり 梅", "¥140"], ["水 500ml", "¥110"], ["ガム", "¥130"]], total: "¥380", tax: "¥30", member: "************1756", approval: "449367", slip: "250-626-285-1810", offset: 44 },
+export type ReceiptTemplate = Omit<ReceiptFrame, "image">;
+
+export const RECEIPT_TEMPLATES: readonly ReceiptTemplate[] = [
+  { tint: "white", shop: "サイゼリヤ 渋谷店", address: "東京都渋谷区道玄坂2-6-17", datetime: "2026年08月14日(木) 21:07", register: "レジ#2 No.1749", items: [["ミラノ風ドリア", "¥300"], ["ドリンクバー", "¥200"], ["小エビのサラダ", "¥350"]], total: "¥850", tax: "¥68", member: "************1749", approval: "449318", slip: "250-626-278-1810", offset: -40 },
+  { tint: "pink", shop: "STATIC STORE 下北沢", address: "世田谷区北沢2-25-8", datetime: "2026年08月15日(金) 13:42", register: "レジ#1 No.1762", items: [["古着 ジャケット", "¥6,800"], ["ハンガー", "¥110"]], total: "¥6,910", tax: "¥552", member: "************1750", approval: "449325", slip: "250-626-279-1810", offset: -3 },
+  { tint: "grey", shop: "ローソン 新宿三丁目", address: "新宿区新宿3-17-5", datetime: "2026年08月15日(金) 18:20", register: "レジ#2 No.1775", items: [["からあげクン", "¥238"], ["緑茶 525ml", "¥140"], ["レジ袋", "¥5"]], total: "¥383", tax: "¥30", member: "************1751", approval: "449332", slip: "250-626-280-1810", offset: 34 },
+  { tint: "white", shop: "古着屋 セカンド 高円寺", address: "杉並区高円寺南4-27", datetime: "2026年08月16日(土) 15:03", register: "レジ#1 No.1788", items: [["デニム 中古", "¥12,000"], ["ベルト", "¥1,500"]], total: "¥13,500", tax: "¥1,080", member: "************1752", approval: "449339", slip: "250-626-281-1810", offset: -19 },
+  { tint: "white", shop: "ユニクロ 原宿店", address: "渋谷区神宮前6-1-9", datetime: "2026年08月16日(土) 19:51", register: "レジ#2 No.1801", items: [["ヒートテック", "¥990"], ["ソックス", "¥390"]], total: "¥1,380", tax: "¥110", member: "************1753", approval: "449346", slip: "250-626-282-1810", offset: 18 },
+  { tint: "grey", shop: "ブックオフ 中野店", address: "中野区中野5-52", datetime: "2026年08月17日(日) 11:30", register: "レジ#2 No.1814", items: [["雑誌 バックナンバー", "¥420"], ["写真集", "¥1,980"]], total: "¥2,400", tax: "¥192", member: "************1754", approval: "449353", slip: "250-626-283-1810", offset: -30 },
+  { tint: "pink", shop: "STATIC STORE 代官山", address: "渋谷区代官山町17-6", datetime: "2026年08月17日(日) 16:12", register: "レジ#1 No.1827", items: [["スニーカー 中古", "¥28,000"]], total: "¥28,000", tax: "¥2,240", member: "************1755", approval: "449360", slip: "250-626-284-1810", offset: 7 },
+  { tint: "white", shop: "セブン-イレブン 池袋東口", address: "豊島区南池袋1-28", datetime: "2026年08月18日(月) 07:55", register: "レジ#2 No.1840", items: [["おにぎり 梅", "¥140"], ["水 500ml", "¥110"], ["ガム", "¥130"]], total: "¥380", tax: "¥30", member: "************1756", approval: "449367", slip: "250-626-285-1810", offset: 44 },
 ];

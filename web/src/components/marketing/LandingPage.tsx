@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import type { ReceiptFrame } from "@/lib/marketing-content";
+
 import { ReceiptHero, ReceiptStrip } from "@/components/marketing/ReceiptFrames";
 import { Barcode, Dashes, Line, Sheet } from "@/components/marketing/Sheet";
 import {
@@ -11,12 +13,14 @@ import {
   PRESETS_COPY,
   PRICING_COPY,
   PRODUCT_NAME,
-  RECEIPT_FRAMES,
   SAMPLE_FEED,
   SIGNUP_CTA_COPY,
   SIGNUP_HREF,
   WHAT_IT_DOES_COPY,
+  loopLabel,
+  stripLabel,
 } from "@/lib/marketing-content";
+import { getReceiptFrames } from "@/lib/receipt-frames";
 
 const LABEL = "text-[11px] uppercase tracking-[0.16em]";
 const BUTTON_PRIMARY =
@@ -25,13 +29,14 @@ const BUTTON_SECONDARY =
   "inline-block border-2 border-ink px-4 py-2 text-[17px] text-ink transition-opacity hover:opacity-70";
 
 export function LandingPage() {
+  const frames = getReceiptFrames();
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-ink selection:text-paper-white">
       <Header />
       <main className="mx-auto max-w-[1440px] px-5 pb-20 md:px-16">
-        <Hero />
+        <Hero frames={frames} />
         <div className="mt-16 md:mt-[72px]">
-          <ReceiptStrip frames={RECEIPT_FRAMES} stripLabel={HERO_COPY.stripLabel} />
+          <ReceiptStrip frames={frames} stripLabel={stripLabel(frames.length)} />
         </div>
         <section
           id="how-it-works"
@@ -65,10 +70,10 @@ function Header() {
   );
 }
 
-function Hero() {
+function Hero({ frames }: { frames: ReceiptFrame[] }) {
   return (
     <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[680px_minmax(0,1fr)] lg:gap-14">
-      <ReceiptHero frames={RECEIPT_FRAMES} loopLabel={HERO_COPY.loopLabel} />
+      <ReceiptHero frames={frames} loopLabel={loopLabel(frames.length)} />
       <div className="flex min-w-0 flex-col gap-6">
         <HeadlineReceipt />
         <FeedReceipt />

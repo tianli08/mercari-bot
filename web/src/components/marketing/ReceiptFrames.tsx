@@ -240,6 +240,8 @@ export function ReceiptHero({
     return () => window.clearInterval(id);
   }, [prints, frames.length]);
 
+  if (frames.length === 0) return null;
+
   return (
     <div ref={heroRef} className="relative w-full max-w-[680px]">
       <div className="aspect-square w-full overflow-hidden">
@@ -248,10 +250,10 @@ export function ReceiptHero({
           style={{ width: HERO_SIZE, height: HERO_SIZE, transform: `scale(${scale})` }}
         >
           <ScannedFrame
-            frame={frames[current]}
-            print={prints ? prints[current] : null}
+            frame={frames[current % frames.length]}
+            print={prints ? prints[current % frames.length] : null}
             size={HERO_SIZE}
-            index={current}
+            index={current % frames.length}
           />
         </div>
       </div>
@@ -268,8 +270,9 @@ export function ReceiptStrip({
   stripLabel: string;
 }) {
   const prints = useThermalPrints(frames, STRIP_SIZE);
+  if (frames.length === 0) return null;
   return (
-    <section aria-label="All eight frames">
+    <section aria-label="All frames">
       <div className="flex gap-5 overflow-x-auto pb-2 pt-1">
         {frames.map((frame, i) => (
           <div
