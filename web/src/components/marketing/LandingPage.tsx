@@ -4,6 +4,7 @@ import type { ReceiptFrame } from "@/lib/marketing-content";
 
 import { ReceiptHero, ReceiptStrip } from "@/components/marketing/ReceiptFrames";
 import { Barcode, Dashes, Line, Sheet } from "@/components/marketing/Sheet";
+import { SnappyAnchors } from "@/components/marketing/SnappyAnchors";
 import {
   CATALOGS_HREF,
   FOOTER_COPY,
@@ -32,6 +33,7 @@ export function LandingPage() {
   const frames = getReceiptFrames();
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-ink selection:text-paper-white">
+      <SnappyAnchors />
       <Header />
       <main className="mx-auto max-w-[1440px] px-5 pb-20 md:px-16">
         <Hero frames={frames} />
