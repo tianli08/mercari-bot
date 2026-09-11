@@ -23,13 +23,7 @@ export const HERO_COPY = {
   copyNumber: "87",
 } as const;
 
-export function loopLabel(count: number): string {
-  return `● ${count} FRAME${count === 1 ? "" : "S"} · 1 RECEIPT EACH · LOOP`;
-}
-
-export function stripLabel(count: number): string {
-  return `${count} RECEIPT${count === 1 ? "" : "S"} FROM A WEEK IN TOKYO. ONE FRAME PRINTED ON EACH. SCANNED FLAT.`;
-}
+export const HERO_LOOP_LABEL = "● LIVE · MERCARI JP → DISCORD";
 
 export const WHAT_IT_DOES_COPY = {
   heading: "HOW IT WORKS",

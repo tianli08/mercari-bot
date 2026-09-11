@@ -18,8 +18,7 @@ import {
   SIGNUP_CTA_COPY,
   SIGNUP_HREF,
   WHAT_IT_DOES_COPY,
-  loopLabel,
-  stripLabel,
+  HERO_LOOP_LABEL,
 } from "@/lib/marketing-content";
 import { getReceiptFrames } from "@/lib/receipt-frames";
 
@@ -38,7 +37,7 @@ export function LandingPage() {
       <main className="mx-auto max-w-[1440px] px-5 pb-20 md:px-16">
         <Hero frames={frames} />
         <div className="mt-16 md:mt-[72px]">
-          <ReceiptStrip frames={frames} stripLabel={stripLabel(frames.length)} />
+          <ReceiptStrip frames={frames} />
         </div>
         <section
           id="how-it-works"
@@ -75,7 +74,7 @@ function Header() {
 function Hero({ frames }: { frames: ReceiptFrame[] }) {
   return (
     <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[680px_minmax(0,1fr)] lg:gap-14">
-      <ReceiptHero frames={frames} loopLabel={loopLabel(frames.length)} />
+      <ReceiptHero frames={frames} loopLabel={HERO_LOOP_LABEL} />
       <div className="flex min-w-0 flex-col gap-6">
         <HeadlineReceipt />
         <FeedReceipt />

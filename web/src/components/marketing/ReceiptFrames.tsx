@@ -262,13 +262,7 @@ export function ReceiptHero({
   );
 }
 
-export function ReceiptStrip({
-  frames,
-  stripLabel,
-}: {
-  frames: readonly ReceiptFrame[];
-  stripLabel: string;
-}) {
+export function ReceiptStrip({ frames }: { frames: readonly ReceiptFrame[] }) {
   const prints = useThermalPrints(frames, STRIP_SIZE);
   if (frames.length === 0) return null;
   return (
@@ -289,7 +283,6 @@ export function ReceiptStrip({
           </div>
         ))}
       </div>
-      <div className="mt-3.5 text-[11px] uppercase tracking-[0.16em] text-ink-dim">{stripLabel}</div>
     </section>
   );
 }
