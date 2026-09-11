@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { tintClass } from "@/components/marketing/Sheet";
 import type { ReceiptFrame } from "@/lib/marketing-content";
@@ -13,6 +13,8 @@ import {
 const HERO_SIZE = 680;
 const STRIP_SIZE = 160;
 const FRAME_MS = 300;
+/** Width the optimizer serves the source photo at. Must be in Next's deviceSizes. */
+const SOURCE_WIDTH = 1080;
 
 const PRINT_OPTIONS: Partial<ThermalPrintOptions> = {
   grain: 1.6,
@@ -26,52 +28,105 @@ const PRINT_OPTIONS: Partial<ThermalPrintOptions> = {
   ink: "#1c1a17",
 };
 
+/** Route the photo through Next's image optimizer so the shader never sees a 24MP original. */
+function optimizedSrc(src: string): string {
+  return `/_next/image?url=${encodeURIComponent(src)}&w=${SOURCE_WIDTH}&q=75`;
+}
+
+interface FramePrints {
+  hero: (HTMLCanvasElement | null)[];
+  strip: (HTMLCanvasElement | null)[];
+}
+
 /**
- * Print every frame once through the shader on one hidden WebGL canvas and
- * hand back data URLs, so the page never holds more than one GL context.
+ * Print every frame through the shader on one hidden WebGL canvas, copying
+ * each result into a plain 2D canvas as it finishes so frames appear one by
+ * one. No PNG encoding, and only one GL context for the whole page.
  */
-function useThermalPrints(frames: readonly ReceiptFrame[], size: number) {
-  const [prints, setPrints] = useState<string[] | null>(null);
+function useThermalFrames(frames: readonly ReceiptFrame[]): FramePrints {
+  const [prints, setPrints] = useState<FramePrints>(() => ({
+    hero: frames.map(() => null),
+    strip: frames.map(() => null),
+  }));
 
   useEffect(() => {
     let cancelled = false;
-    const canvas = document.createElement("canvas");
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = Math.round(size * dpr);
-    canvas.height = Math.round(size * dpr);
-    // The shader scales grain by canvas.width / clientWidth; give it a CSS size.
-    canvas.style.width = `${size}px`;
-    canvas.style.height = `${size}px`;
-
+    const gl = document.createElement("canvas");
     let printer: ReturnType<typeof createThermalPrinter>;
     try {
-      printer = createThermalPrinter(canvas);
+      printer = createThermalPrinter(gl);
     } catch {
       return;
     }
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+
+    const printAt = (image: HTMLImageElement, size: number, seed: number) => {
+      gl.width = Math.round(size * dpr);
+      gl.height = Math.round(size * dpr);
+      printer.render(image, { ...PRINT_OPTIONS, seed });
+      const out = document.createElement("canvas");
+      out.width = gl.width;
+      out.height = gl.height;
+      out.style.width = `${size}px`;
+      out.style.height = `${size}px`;
+      out.style.display = "block";
+      out.getContext("2d")?.drawImage(gl, 0, 0);
+      return out;
+    };
 
     (async () => {
-      const out: string[] = [];
       for (let i = 0; i < frames.length; i++) {
+        let image: HTMLImageElement;
         try {
-          const image = await loadImage(frames[i].image);
-          if (cancelled) return;
-          printer.render(image, { ...PRINT_OPTIONS, seed: 7 + i * 11 });
-          out.push(canvas.toDataURL("image/png"));
+          image = await loadImage(optimizedSrc(frames[i].image));
         } catch {
-          out.push("");
+          try {
+            image = await loadImage(frames[i].image);
+          } catch {
+            continue;
+          }
         }
+        if (cancelled) return;
+        const seed = 7 + i * 11;
+        const hero = printAt(image, HERO_SIZE, seed);
+        const strip = printAt(image, STRIP_SIZE, seed);
+        setPrints((prev) => {
+          const next = { hero: [...prev.hero], strip: [...prev.strip] };
+          next.hero[i] = hero;
+          next.strip[i] = strip;
+          return next;
+        });
+        // Let the browser paint between frames.
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
       }
-      if (!cancelled) setPrints(out);
     })();
 
     return () => {
       cancelled = true;
       printer.destroy();
     };
-  }, [frames, size]);
+  }, [frames]);
 
   return prints;
+}
+
+/** Mounts a prepared canvas element into the DOM, moving it if it changes. */
+function PrintLayer({ canvas }: { canvas: HTMLCanvasElement | null }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (canvas) el.replaceChildren(canvas);
+    else el.replaceChildren();
+  }, [canvas]);
+  return (
+    <div
+      ref={ref}
+      className="pointer-events-none absolute inset-0"
+      style={{ mixBlendMode: "multiply" }}
+      aria-hidden
+    />
+  );
 }
 
 function ReceiptUnderPrint({ frame, scale }: { frame: ReceiptFrame; scale: number }) {
@@ -180,7 +235,7 @@ function ScannedFrame({
   index,
 }: {
   frame: ReceiptFrame;
-  print: string | null;
+  print: HTMLCanvasElement | null;
   size: number;
   index: number;
 }) {
@@ -191,34 +246,33 @@ function ScannedFrame({
       style={{ width: size, height: size }}
     >
       <ReceiptUnderPrint frame={frame} scale={scale} />
-      {print ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={print}
-          alt=""
-          width={size}
-          height={size}
-          className="absolute inset-0 block"
-          style={{ width: size, height: size, mixBlendMode: "multiply" }}
-          draggable={false}
-        />
-      ) : null}
+      <PrintLayer canvas={print} />
       <span className="sr-only">Frame {index + 1}</span>
     </div>
   );
 }
 
-export function ReceiptHero({
+/**
+ * Hero square looping the frames, the receipts column beside it (passed as
+ * children), and the strip of every frame below. One component so the
+ * frames are loaded and printed exactly once for both.
+ */
+export function ReceiptFrames({
   frames,
   loopLabel,
+  children,
 }: {
   frames: readonly ReceiptFrame[];
   loopLabel: string;
+  children: ReactNode;
 }) {
-  const prints = useThermalPrints(frames, HERO_SIZE);
-  const [current, setCurrent] = useState(0);
+  const prints = useThermalFrames(frames);
+  const [tick, setTick] = useState(0);
   const heroRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
+
+  const ready = prints.hero.flatMap((p, i) => (p ? [i] : []));
+  const current = ready.length ? ready[tick % ready.length] : 0;
 
   useEffect(() => {
     const el = heroRef.current;
@@ -231,58 +285,53 @@ export function ReceiptHero({
   }, []);
 
   useEffect(() => {
-    if (!prints) return;
+    if (ready.length < 2) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const id = window.setInterval(
-      () => setCurrent((c) => (c + 1) % frames.length),
-      FRAME_MS,
-    );
+    const id = window.setInterval(() => setTick((t) => t + 1), FRAME_MS);
     return () => window.clearInterval(id);
-  }, [prints, frames.length]);
-
-  if (frames.length === 0) return null;
+  }, [ready.length]);
 
   return (
-    <div ref={heroRef} className="relative w-full max-w-[680px]">
-      <div className="aspect-square w-full overflow-hidden">
-        <div
-          className="origin-top-left"
-          style={{ width: HERO_SIZE, height: HERO_SIZE, transform: `scale(${scale})` }}
-        >
-          <ScannedFrame
-            frame={frames[current % frames.length]}
-            print={prints ? prints[current % frames.length] : null}
-            size={HERO_SIZE}
-            index={current % frames.length}
-          />
-        </div>
-      </div>
-      <div className="mt-3 text-[11px] uppercase tracking-[0.16em] text-ink-dim">{loopLabel}</div>
-    </div>
-  );
-}
-
-export function ReceiptStrip({ frames }: { frames: readonly ReceiptFrame[] }) {
-  const prints = useThermalPrints(frames, STRIP_SIZE);
-  if (frames.length === 0) return null;
-  return (
-    <section aria-label="All frames">
-      <div className="flex gap-5 overflow-x-auto pb-2 pt-1">
-        {frames.map((frame, i) => (
-          <div
-            key={frame.image}
-            className="shrink-0"
-            style={{ transform: `rotate(${[-1.5, 1, -0.5, 1.5, -1, 0.5, -1.5, 1][i % 8]}deg)` }}
-          >
-            <ScannedFrame
-              frame={frame}
-              print={prints ? prints[i] : null}
-              size={STRIP_SIZE}
-              index={i}
-            />
+    <>
+      <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[680px_minmax(0,1fr)] lg:gap-14">
+        {frames.length > 0 && (
+          <div ref={heroRef} className="relative w-full max-w-[680px]">
+            <div className="aspect-square w-full overflow-hidden">
+              <div
+                className="origin-top-left"
+                style={{ width: HERO_SIZE, height: HERO_SIZE, transform: `scale(${scale})` }}
+              >
+                <ScannedFrame
+                  frame={frames[current]}
+                  print={prints.hero[current]}
+                  size={HERO_SIZE}
+                  index={current}
+                />
+              </div>
+            </div>
+            <div className="mt-3 text-[11px] uppercase tracking-[0.16em] text-ink-dim">
+              {loopLabel}
+            </div>
           </div>
-        ))}
-      </div>
-    </section>
+        )}
+        <div className="flex min-w-0 flex-col gap-6">{children}</div>
+      </section>
+
+      {frames.length > 0 && (
+        <section aria-label="All frames" className="mt-16 md:mt-[72px]">
+          <div className="flex gap-5 overflow-x-auto pb-2 pt-1">
+            {frames.map((frame, i) => (
+              <div
+                key={frame.image}
+                className="shrink-0"
+                style={{ transform: `rotate(${[-1.5, 1, -0.5, 1.5, -1, 0.5, -1.5, 1][i % 8]}deg)` }}
+              >
+                <ScannedFrame frame={frame} print={prints.strip[i]} size={STRIP_SIZE} index={i} />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </>
   );
 }

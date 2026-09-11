@@ -1,8 +1,6 @@
 import Link from "next/link";
 
-import type { ReceiptFrame } from "@/lib/marketing-content";
-
-import { ReceiptHero, ReceiptStrip } from "@/components/marketing/ReceiptFrames";
+import { ReceiptFrames } from "@/components/marketing/ReceiptFrames";
 import { ReceiptFeed } from "@/components/marketing/ReceiptFeed";
 import { Barcode, Dashes, Line, Sheet } from "@/components/marketing/Sheet";
 import { SnappyAnchors } from "@/components/marketing/SnappyAnchors";
@@ -35,10 +33,10 @@ export function LandingPage() {
       <SnappyAnchors />
       <Header />
       <main className="mx-auto max-w-[1440px] px-5 pb-20 md:px-16">
-        <Hero frames={frames} />
-        <div className="mt-16 md:mt-[72px]">
-          <ReceiptStrip frames={frames} />
-        </div>
+        <ReceiptFrames frames={frames} loopLabel={HERO_LOOP_LABEL}>
+          <HeadlineReceipt />
+          <ReceiptFeed />
+        </ReceiptFrames>
         <section
           id="how-it-works"
           className="mt-14 grid scroll-mt-24 grid-cols-1 gap-8 lg:grid-cols-[560px_minmax(0,1fr)] lg:gap-14"
@@ -68,18 +66,6 @@ function Header() {
         </Link>
       </nav>
     </header>
-  );
-}
-
-function Hero({ frames }: { frames: ReceiptFrame[] }) {
-  return (
-    <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[680px_minmax(0,1fr)] lg:gap-14">
-      <ReceiptHero frames={frames} loopLabel={HERO_LOOP_LABEL} />
-      <div className="flex min-w-0 flex-col gap-6">
-        <HeadlineReceipt />
-        <ReceiptFeed />
-      </div>
-    </section>
   );
 }
 
