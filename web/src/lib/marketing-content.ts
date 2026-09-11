@@ -72,19 +72,31 @@ export const PRESETS_COPY = {
   barcode: "CATALOG20",
 } as const;
 
-// Illustrative rows for the alert feed receipt. Not live data.
+// Illustrative alerts for the feed receipt. Not live data. The feed prints
+// these in order, looping, with the clock advancing by `gapSeconds`.
 export const SAMPLE_FEED = {
   heading: "LATEST ALERTS",
   footnote: "SAMPLE FEED",
+  startTime: "13:40",
+  visibleRows: 5,
   rows: [
-    { time: "14:02", listing: "CCP DRIP SNEAKER 42 BLACK", price: "¥186,000", sold: false },
-    { time: "14:01", listing: "BBS P13 PANTS HORSE LEATHER M", price: "¥98,000", sold: false },
-    { time: "13:58", listing: "MARGIELA AW98 FLAT GARMENT JKT", price: "¥64,500", sold: false },
-    { time: "13:55", listing: "N(N)INE NOIR KNIT 2006", price: "¥42,000", sold: true },
-    { time: "13:51", listing: "RICK OWENS GEOBASKET 2012 MILK", price: "¥71,000", sold: false },
+    { listing: "RAF SIMONS AW05 HISTORY BOMBER", price: "¥340,000", sold: true, gapSeconds: 0 },
+    { listing: "JULIUS_7 COATED DENIM SZ 1", price: "¥23,800", sold: false, gapSeconds: 267 },
+    { listing: "UNDERCOVER SS03 SCAB DENIM JKT", price: "¥128,000", sold: false, gapSeconds: 254 },
+    { listing: "RICK OWENS GEOBASKET 2012 MILK", price: "¥71,000", sold: false, gapSeconds: 147 },
+    { listing: "N(N)INE NOIR KNIT 2006", price: "¥42,000", sold: true, gapSeconds: 204 },
+    { listing: "MARGIELA AW98 FLAT GARMENT JKT", price: "¥64,500", sold: false, gapSeconds: 197 },
+    { listing: "BBS P13 PANTS HORSE LEATHER M", price: "¥98,000", sold: false, gapSeconds: 207 },
+    { listing: "CCP DRIP SNEAKER 42 BLACK", price: "¥186,000", sold: false, gapSeconds: 24 },
+    { listing: "KAPITAL BORO SASHIKO JKT 3", price: "¥58,000", sold: false, gapSeconds: 311 },
+    { listing: "ANN D. 3-BUCKLE BOOTS 41", price: "¥76,000", sold: false, gapSeconds: 188 },
+    { listing: "THESOLOIST ZIP JKT 48", price: "¥112,000", sold: true, gapSeconds: 243 },
+    { listing: "DIOR HOMME 04 JKT 46", price: "¥89,000", sold: false, gapSeconds: 156 },
   ],
   soldStamp: "済 SOLD",
 } as const;
+
+export type SampleAlert = (typeof SAMPLE_FEED.rows)[number];
 
 export const PRICING_COPY = {
   included: [

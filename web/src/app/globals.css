@@ -88,3 +88,44 @@ body {
   opacity: 0.75;
   mix-blend-mode: multiply;
 }
+
+/* Live feed receipt: a line prints in at the bottom, the roll feeds up. */
+.feed-row {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--feed-ms, 360ms) cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.feed-row > * {
+  min-height: 0;
+  overflow: hidden;
+}
+.feed-row-leaving {
+  grid-template-rows: 0fr;
+}
+.feed-row-printing {
+  animation: feed-grow var(--feed-ms, 360ms) cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes feed-grow {
+  from {
+    grid-template-rows: 0fr;
+  }
+  to {
+    grid-template-rows: 1fr;
+  }
+}
+
+/* Print-head sweep: revealed left to right in coarse steps, like dot rows. */
+.feed-print {
+  display: inline-block;
+  clip-path: inset(0 100% 0 0);
+  animation: feed-print var(--print-ms, 420ms) steps(28, end) forwards;
+}
+.feed-print-late {
+  animation-delay: calc(var(--print-ms, 420ms) * 0.55);
+  animation-duration: calc(var(--print-ms, 420ms) * 0.45);
+}
+@keyframes feed-print {
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}

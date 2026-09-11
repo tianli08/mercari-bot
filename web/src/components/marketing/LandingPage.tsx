@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ReceiptFrame } from "@/lib/marketing-content";
 
 import { ReceiptHero, ReceiptStrip } from "@/components/marketing/ReceiptFrames";
+import { ReceiptFeed } from "@/components/marketing/ReceiptFeed";
 import { Barcode, Dashes, Line, Sheet } from "@/components/marketing/Sheet";
 import { SnappyAnchors } from "@/components/marketing/SnappyAnchors";
 import {
@@ -14,7 +15,6 @@ import {
   PRESETS_COPY,
   PRICING_COPY,
   PRODUCT_NAME,
-  SAMPLE_FEED,
   SIGNUP_CTA_COPY,
   SIGNUP_HREF,
   WHAT_IT_DOES_COPY,
@@ -77,7 +77,7 @@ function Hero({ frames }: { frames: ReceiptFrame[] }) {
       <ReceiptHero frames={frames} loopLabel={HERO_LOOP_LABEL} />
       <div className="flex min-w-0 flex-col gap-6">
         <HeadlineReceipt />
-        <FeedReceipt />
+        <ReceiptFeed />
       </div>
     </section>
   );
@@ -124,33 +124,6 @@ function HeadlineReceipt() {
           right={HERO_COPY.copyNumber}
           className="text-xs"
         />
-      </div>
-    </Sheet>
-  );
-}
-
-function FeedReceipt() {
-  return (
-    <Sheet className="px-6 pb-5 pt-5 md:px-8">
-      <div className="ink flex flex-col gap-1.5 text-[15px]">
-        <Line
-          left={SAMPLE_FEED.heading}
-          right={SAMPLE_FEED.footnote}
-          className="text-xs tracking-[0.14em] text-ink-faded"
-        />
-        {SAMPLE_FEED.rows.map((row) => (
-          <Line
-            key={row.time}
-            left={
-              <>
-                {row.time} {row.listing}{" "}
-                {row.sold && <span className="stamp font-jp text-[13px]">{SAMPLE_FEED.soldStamp}</span>}
-              </>
-            }
-            right={<span className={row.sold ? "line-through" : ""}>{row.price}</span>}
-            className={row.sold ? "text-ink-faded" : ""}
-          />
-        ))}
       </div>
     </Sheet>
   );
