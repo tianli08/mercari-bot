@@ -293,7 +293,7 @@ export function ReceiptFrames({
 
   return (
     <>
-      <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[680px_minmax(0,1fr)] lg:gap-14">
+      <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-10 xl:grid-cols-[680px_minmax(0,1fr)] xl:gap-14">
         {frames.length > 0 && (
           <div ref={heroRef} className="relative w-full max-w-[680px]">
             <div className="aspect-square w-full overflow-hidden">

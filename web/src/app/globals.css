@@ -65,11 +65,25 @@ body {
   text-shadow: 0 0 0.6px rgba(42, 38, 34, 0.8);
 }
 
-/* Double-height print, the way a receipt printer stretches a line. */
+/* Double-height print, the way a receipt printer stretches a line.
+   `.tall` is for a single line inside a row. `.tall-block` is for wrapped
+   text: it sets the type 25% larger and squeezes it back horizontally, so
+   the layout box already has the stretched height and nothing overlaps. */
 .tall {
   display: block;
   transform: scaleY(1.25);
   transform-origin: top left;
+}
+.tall-block {
+  display: block;
+  width: 125%;
+  font-size: 1.25em;
+  transform: scaleX(0.8);
+  transform-origin: top left;
+}
+.tall-block-center {
+  transform-origin: top center;
+  margin-left: -12.5%;
 }
 
 .dashes {

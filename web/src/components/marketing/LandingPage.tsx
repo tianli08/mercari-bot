@@ -83,8 +83,8 @@ function HeadlineReceipt() {
           right={HERO_COPY.plan}
           className="text-[13px] tracking-[0.1em]"
         />
-        <h1 className="pb-5 pt-3 text-[24px] leading-[1.12] tracking-[0.02em] md:text-[30px]">
-          <span className="tall text-balance">{HERO_COPY.valueProposition}</span>
+        <h1 className="pb-4 pt-3 text-[22px] leading-[1.12] tracking-[0.02em] md:text-[24px] min-[1400px]:text-[30px]">
+          <span className="tall-block text-balance">{HERO_COPY.valueProposition}</span>
         </h1>
         <div className="font-jp text-sm leading-relaxed">
           {HERO_COPY.thanksJa.map((line) => (
@@ -141,8 +141,8 @@ function HowItWorksReceipt() {
         <Line left={PRICING_COPY.plan.label} right={PRICING_COPY.plan.value} />
         <Dashes double />
         <div id="signup-cta" className="flex flex-col items-center gap-2.5 pt-1 text-center">
-          <div className="text-[22px] leading-[1.15]">
-            <span className="tall" style={{ transformOrigin: "top center" }}>
+          <div className="w-full text-[22px] leading-[1.15]">
+            <span className="tall-block tall-block-center">
               {SIGNUP_CTA_COPY.heading[0]}
               <br />
               {SIGNUP_CTA_COPY.heading[1]}
