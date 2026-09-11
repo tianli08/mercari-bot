@@ -22,7 +22,7 @@ export function Sheet({
   className?: string;
   children: ReactNode;
 }) {
-  return <div className={`sheet ${TINT_CLASS[tint]} ${className}`}>{children}</div>;
+  return <div className={`sheet relative ${TINT_CLASS[tint]} ${className}`}>{children}</div>;
 }
 
 /** One left/right line of receipt print. */
@@ -37,7 +37,7 @@ export function Line({
 }) {
   return (
     <div className={`flex justify-between gap-3 ${className}`}>
-      <span>{left}</span>
+      <span className="min-w-0">{left}</span>
       {right !== undefined && <span className="whitespace-nowrap">{right}</span>}
     </div>
   );

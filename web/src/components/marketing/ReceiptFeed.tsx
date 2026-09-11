@@ -8,6 +8,8 @@ import { SAMPLE_FEED } from "@/lib/marketing-content";
 const PRINT_EVERY_MS = 2600;
 const PRINT_MS = 420;
 const FEED_MS = 360;
+/** Fixed row height in px: 18px line plus 5px padding each side. */
+const ROW_PX = 28;
 
 interface PrintedRow {
   key: number;
@@ -106,7 +108,10 @@ export function ReceiptFeed() {
           right={SAMPLE_FEED.footnote}
           className="text-xs tracking-[0.14em] text-ink-faded"
         />
-        <div className="flex flex-col overflow-hidden">
+        <div
+          className="flex flex-col justify-end overflow-hidden"
+          style={{ height: SAMPLE_FEED.visibleRows * ROW_PX }}
+        >
           {state.rows.map((row) => (
             <div
               key={row.key}
@@ -115,10 +120,18 @@ export function ReceiptFeed() {
             >
               <Line
                 left={
-                  <span className={row.printing ? "feed-print" : ""} style={{ "--print-ms": `${PRINT_MS}ms` } as React.CSSProperties}>
+                  <span
+                    className={`block min-w-0 truncate ${row.printing ? "feed-print" : ""}`}
+                    style={{ "--print-ms": `${PRINT_MS}ms` } as React.CSSProperties}
+                  >
                     {row.time} {row.listing}{" "}
                     {row.sold && (
-                      <span className="stamp font-jp text-[13px]">{SAMPLE_FEED.soldStamp}</span>
+                      <span
+                        className="stamp font-jp text-[12px]"
+                        style={{ boxSizing: "border-box", height: 18, lineHeight: "14px", padding: "0 6px", verticalAlign: "top" }}
+                      >
+                        {SAMPLE_FEED.soldStamp}
+                      </span>
                     )}
                   </span>
                 }
@@ -130,7 +143,7 @@ export function ReceiptFeed() {
                     {row.price}
                   </span>
                 }
-                className={`py-[3px] ${row.sold ? "text-ink-faded" : ""}`}
+                className={`items-center py-[5px] leading-[18px] ${row.sold ? "text-ink-faded" : ""}`}
               />
             </div>
           ))}

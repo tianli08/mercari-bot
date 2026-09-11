@@ -10,7 +10,10 @@ import {
   type ThermalPrintOptions,
 } from "@/lib/thermal-print/shader";
 
+/** Hero prints are rendered at this width; the receipt text scales from it. */
 const HERO_SIZE = 680;
+/** Portrait height for the hero print so it can cover a tall frame without upscaling much. */
+const HERO_PRINT_HEIGHT = 1040;
 const STRIP_SIZE = 160;
 const FRAME_MS = 300;
 /** Width the optimizer serves the source photo at. Must be in Next's deviceSizes. */
@@ -60,15 +63,16 @@ function useThermalFrames(frames: readonly ReceiptFrame[]): FramePrints {
     }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
 
-    const printAt = (image: HTMLImageElement, size: number, seed: number) => {
-      gl.width = Math.round(size * dpr);
-      gl.height = Math.round(size * dpr);
+    const printAt = (image: HTMLImageElement, width: number, height: number, seed: number) => {
+      gl.width = Math.round(width * dpr);
+      gl.height = Math.round(height * dpr);
       printer.render(image, { ...PRINT_OPTIONS, seed });
       const out = document.createElement("canvas");
       out.width = gl.width;
       out.height = gl.height;
-      out.style.width = `${size}px`;
-      out.style.height = `${size}px`;
+      out.style.width = "100%";
+      out.style.height = "100%";
+      out.style.objectFit = "cover";
       out.style.display = "block";
       out.getContext("2d")?.drawImage(gl, 0, 0);
       return out;
@@ -88,8 +92,8 @@ function useThermalFrames(frames: readonly ReceiptFrame[]): FramePrints {
         }
         if (cancelled) return;
         const seed = 7 + i * 11;
-        const hero = printAt(image, HERO_SIZE, seed);
-        const strip = printAt(image, STRIP_SIZE, seed);
+        const hero = printAt(image, HERO_SIZE, HERO_PRINT_HEIGHT, seed);
+        const strip = printAt(image, STRIP_SIZE, STRIP_SIZE, seed);
         setPrints((prev) => {
           const next = { hero: [...prev.hero], strip: [...prev.strip] };
           next.hero[i] = hero;
@@ -224,6 +228,40 @@ function ReceiptUnderPrint({ frame, scale }: { frame: ReceiptFrame; scale: numbe
       <div className="text-center text-ink-dim" style={{ fontSize: fs * 0.8, marginTop: 8 * scale }}>
         またのご来店をお待ちしております
       </div>
+      <div className="dashes" style={{ fontSize: fs * 0.9, height: fs, marginTop: 10 * scale }}>
+        {"-".repeat(60)}
+      </div>
+      <div className="flex justify-between gap-3">
+        <span>ポイント残高</span>
+        <span>{frame.approval.slice(0, 3)},{frame.approval.slice(3)} P</span>
+      </div>
+      <div className="flex justify-between gap-3">
+        <span>今回獲得ポイント</span>
+        <span>{frame.tax.replace("¥", "")} P</span>
+      </div>
+      <div className="flex justify-between gap-3">
+        <span>有効期限</span>
+        <span>2027年08月31日</span>
+      </div>
+      <div className="dashes" style={{ fontSize: fs * 0.9, height: fs }}>
+        {"-".repeat(60)}
+      </div>
+      <div className="text-ink-dim" style={{ fontSize: fs * 0.8, lineHeight: 1.5 }}>
+        返品・交換はレシートをご持参のうえ、購入日より7日以内にお願いいたします。
+        <br />
+        営業時間 11:00〜20:00　定休日 なし
+      </div>
+      <div className="flex justify-between gap-3" style={{ marginTop: 6 * scale }}>
+        <span>担当</span>
+        <span>{frame.register.slice(-4)}</span>
+      </div>
+      <div className="flex justify-between gap-3">
+        <span>レシートNo.</span>
+        <span>{frame.slip.split("-").reverse().join("")}</span>
+      </div>
+      <div className="text-center" style={{ fontSize: fs * 1.15, marginTop: 10 * scale, letterSpacing: "0.1em" }}>
+        <span className="tall" style={{ transformOrigin: "top center" }}>{frame.shop.split(" ")[0]}</span>
+      </div>
     </div>
   );
 }
@@ -231,19 +269,22 @@ function ReceiptUnderPrint({ frame, scale }: { frame: ReceiptFrame; scale: numbe
 function ScannedFrame({
   frame,
   print,
-  size,
+  scale,
   index,
+  size,
 }: {
   frame: ReceiptFrame;
   print: HTMLCanvasElement | null;
-  size: number;
+  /** Receipt text scale relative to a 680px-wide sheet. */
+  scale: number;
   index: number;
+  /** Fixed square size in px; omit to fill the parent. */
+  size?: number;
 }) {
-  const scale = size / HERO_SIZE;
   return (
     <div
-      className={`sheet relative overflow-hidden ${tintClass(frame.tint)}`}
-      style={{ width: size, height: size }}
+      className={`sheet overflow-hidden ${tintClass(frame.tint)} ${size === undefined ? "absolute inset-0" : "relative"}`}
+      style={size === undefined ? undefined : { width: size, height: size }}
     >
       <ReceiptUnderPrint frame={frame} scale={scale} />
       <PrintLayer canvas={print} />
@@ -277,7 +318,7 @@ export function ReceiptFrames({
   useEffect(() => {
     const el = heroRef.current;
     if (!el) return;
-    const update = () => setScale(Math.min(1, el.clientWidth / HERO_SIZE));
+    const update = () => setScale(el.clientWidth / HERO_SIZE);
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -293,21 +334,17 @@ export function ReceiptFrames({
 
   return (
     <>
-      <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-10 xl:grid-cols-[680px_minmax(0,1fr)] xl:gap-14">
+      <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-stretch lg:gap-10 xl:grid-cols-[680px_minmax(0,1fr)] xl:gap-14">
         {frames.length > 0 && (
-          <div ref={heroRef} className="relative w-full max-w-[680px]">
-            <div className="aspect-square w-full overflow-hidden">
-              <div
-                className="origin-top-left"
-                style={{ width: HERO_SIZE, height: HERO_SIZE, transform: `scale(${scale})` }}
-              >
-                <ScannedFrame
-                  frame={frames[current]}
-                  print={prints.hero[current]}
-                  size={HERO_SIZE}
-                  index={current}
-                />
-              </div>
+          <div className="flex w-full max-w-[680px] flex-col lg:max-w-none">
+            {/* Square on small screens; on large ones stretches to the receipts beside it. */}
+            <div ref={heroRef} className="relative aspect-square w-full lg:aspect-auto lg:flex-1">
+              <ScannedFrame
+                frame={frames[current]}
+                print={prints.hero[current]}
+                scale={scale}
+                index={current}
+              />
             </div>
             <div className="mt-3 text-[11px] uppercase tracking-[0.16em] text-ink-dim">
               {loopLabel}
@@ -326,7 +363,7 @@ export function ReceiptFrames({
                 className="shrink-0"
                 style={{ transform: `rotate(${[-1.5, 1, -0.5, 1.5, -1, 0.5, -1.5, 1][i % 8]}deg)` }}
               >
-                <ScannedFrame frame={frame} print={prints.strip[i]} size={STRIP_SIZE} index={i} />
+                <ScannedFrame frame={frame} print={prints.strip[i]} scale={STRIP_SIZE / HERO_SIZE} size={STRIP_SIZE} index={i} />
               </div>
             ))}
           </div>
