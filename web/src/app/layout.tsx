@@ -1,25 +1,27 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Libre_Barcode_128, Share_Tech_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const shareTechMono = Share_Tech_Mono({
+  variable: "--font-mono",
+  weight: "400",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const libreBarcode = Libre_Barcode_128({
+  variable: "--font-barcode",
+  weight: "400",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
   title: "Static Archive — Real-time Mercari Japan alerts",
   description:
-    "Real-time Mercari Japan alerts for archive and designer fashion, delivered to Discord.",
+    "Real-time Mercari Japan alerts for archive fashion, delivered to Discord.",
   openGraph: {
     title: "Static Archive",
     description:
-      "Real-time Mercari Japan alerts for archive and designer fashion, delivered to Discord.",
+      "Real-time Mercari Japan alerts for archive fashion, delivered to Discord.",
     type: "website",
   },
   twitter: {
@@ -31,8 +33,20 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${shareTechMono.variable} ${libreBarcode.variable} h-full antialiased`}
     >
+      <head>
+        {/* DotGothic16 covers the Japanese receipt text; its Japanese subset is
+            served in unicode-range chunks by Google Fonts, which next/font
+            does not split, so it is linked directly. */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/* eslint-disable-next-line @next/next/no-page-custom-font -- app-router root layout applies to every page */}
+        <link
+          href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap"
+          rel="stylesheet"
+        />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

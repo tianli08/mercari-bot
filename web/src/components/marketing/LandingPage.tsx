@@ -1,210 +1,235 @@
 import Link from "next/link";
 
+import { ReceiptHero, ReceiptStrip } from "@/components/marketing/ReceiptFrames";
+import { Barcode, Dashes, Line, Sheet } from "@/components/marketing/Sheet";
 import {
+  CATALOGS_HREF,
+  FOOTER_COPY,
   HERO_COPY,
   HOW_IT_WORKS_HREF,
-  PRESET_DESIGNER_NAMES,
+  PRESET_CATALOG,
   PRESETS_COPY,
   PRICING_COPY,
   PRODUCT_NAME,
+  RECEIPT_FRAMES,
+  SAMPLE_FEED,
   SIGNUP_CTA_COPY,
   SIGNUP_HREF,
   WHAT_IT_DOES_COPY,
 } from "@/lib/marketing-content";
 
+const LABEL = "text-[11px] uppercase tracking-[0.16em]";
+const BUTTON_PRIMARY =
+  "inline-block border-2 border-ink bg-ink px-4 py-2 text-[17px] text-paper-white transition-opacity hover:opacity-80";
+const BUTTON_SECONDARY =
+  "inline-block border-2 border-ink px-4 py-2 text-[17px] text-ink transition-opacity hover:opacity-70";
+
 export function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#0a0a0a] font-mono text-[#f0f0f0] selection:bg-[#f0f0f0] selection:text-[#0a0a0a]">
+    <div className="min-h-screen bg-background text-foreground selection:bg-ink selection:text-paper-white">
       <Header />
-      <main>
+      <main className="mx-auto max-w-[1440px] px-5 pb-20 md:px-16">
         <Hero />
-        <WhatItDoes />
-        <Presets />
-        <Pricing />
-        <SignUpCTA />
+        <div className="mt-16 md:mt-[72px]">
+          <ReceiptStrip frames={RECEIPT_FRAMES} stripLabel={HERO_COPY.stripLabel} />
+        </div>
+        <section
+          id="how-it-works"
+          className="mt-14 grid scroll-mt-24 grid-cols-1 gap-8 lg:grid-cols-[560px_minmax(0,1fr)] lg:gap-14"
+        >
+          <HowItWorksReceipt />
+          <CatalogReceipt />
+        </section>
+        <Footer />
       </main>
-      <Footer />
     </div>
   );
 }
 
 function Header() {
   return (
-    <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#222222] bg-[#0a0a0a]">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <span className="text-xs font-medium uppercase tracking-[0.2em] text-[#f0f0f0]">
-          {PRODUCT_NAME}
-        </span>
-        <Link
-          href={SIGNUP_HREF}
-          className="bg-[#f0f0f0] px-4 py-2 text-xs font-medium uppercase tracking-[0.15em] text-[#0a0a0a] transition-colors hover:bg-[#c7c7c7]"
-        >
-          {HERO_COPY.primaryCta}
+    <header className="mx-auto flex max-w-[1440px] items-center justify-between px-5 pt-9 md:px-16">
+      <span className={LABEL}>{PRODUCT_NAME}</span>
+      <nav className={`flex gap-5 md:gap-7 ${LABEL}`}>
+        <a href={HOW_IT_WORKS_HREF} className="hidden hover:opacity-70 sm:inline">
+          How it works
+        </a>
+        <a href={CATALOGS_HREF} className="hidden hover:opacity-70 sm:inline">
+          Catalogs
+        </a>
+        <Link href={SIGNUP_HREF} className="border-b border-ink hover:opacity-70">
+          Sign up
         </Link>
-      </div>
+      </nav>
     </header>
   );
 }
 
 function Hero() {
   return (
-    <section className="flex min-h-screen flex-col items-center justify-center px-6 pb-16 pt-20">
-      <div className="max-w-4xl text-center">
-        <h1 className="font-mono text-4xl font-light leading-[1.15] text-[#f0f0f0] md:text-6xl lg:text-7xl">
-          {HERO_COPY.valueProposition}
+    <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[680px_minmax(0,1fr)] lg:gap-14">
+      <ReceiptHero frames={RECEIPT_FRAMES} loopLabel={HERO_COPY.loopLabel} />
+      <div className="flex min-w-0 flex-col gap-6">
+        <HeadlineReceipt />
+        <FeedReceipt />
+      </div>
+    </section>
+  );
+}
+
+function HeadlineReceipt() {
+  return (
+    <Sheet tint="pink" className="px-7 py-7 md:px-9">
+      <div className="ink flex flex-col gap-2.5">
+        <Line
+          left={<span className="font-jp text-[22px]">{HERO_COPY.totalLabelJa}</span>}
+          right={<span className="text-[22px]">{HERO_COPY.totalValue}</span>}
+          className="items-end border-b-2 border-ink pb-1.5"
+        />
+        <Line
+          left={HERO_COPY.totalLabelEn}
+          right={HERO_COPY.plan}
+          className="text-[13px] tracking-[0.1em]"
+        />
+        <h1 className="pb-5 pt-3 text-[24px] leading-[1.12] tracking-[0.02em] md:text-[30px]">
+          <span className="tall text-balance">{HERO_COPY.valueProposition}</span>
         </h1>
-        <div className="mt-12 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-          <Link
-            href={SIGNUP_HREF}
-            className="inline-flex items-center justify-center bg-[#f0f0f0] px-8 py-3 text-xs font-medium uppercase tracking-[0.15em] text-[#0a0a0a] transition-colors hover:bg-[#c7c7c7]"
-          >
+        <div className="font-jp text-sm leading-relaxed">
+          {HERO_COPY.thanksJa.map((line) => (
+            <div key={line}>{line}</div>
+          ))}
+        </div>
+        <p className="max-w-[420px] text-sm leading-normal">{HERO_COPY.supportingLine}</p>
+        <div className="mt-2 flex flex-wrap gap-2.5">
+          <Link href={SIGNUP_HREF} className={BUTTON_PRIMARY}>
             {HERO_COPY.primaryCta}
           </Link>
-          <a
-            href={HOW_IT_WORKS_HREF}
-            className="inline-flex items-center justify-center border border-[#333333] px-8 py-3 text-xs font-medium uppercase tracking-[0.15em] text-[#f0f0f0] transition-colors hover:bg-[#1a1a1a]"
-          >
+          <a href={HOW_IT_WORKS_HREF} className={BUTTON_SECONDARY}>
             {HERO_COPY.secondaryCta}
           </a>
         </div>
+        <Line
+          left={HERO_COPY.footerLeft}
+          right={HERO_COPY.footerRight}
+          className="mt-2.5 border-t border-ink pt-2 text-xs"
+        />
+        <Line
+          left={<span className="font-jp">{HERO_COPY.copyLine}</span>}
+          right={HERO_COPY.copyNumber}
+          className="text-xs"
+        />
       </div>
-    </section>
+    </Sheet>
   );
 }
 
-function WhatItDoes() {
+function FeedReceipt() {
   return (
-    <section
-      id="what-it-does"
-      className="scroll-mt-24 border-t border-[#222222] px-6 py-24"
-    >
-      <div className="mx-auto max-w-5xl">
-        <h2 className="font-mono text-3xl font-light text-[#f0f0f0] md:text-4xl">
-          {WHAT_IT_DOES_COPY.heading}
-        </h2>
-        <div className="mt-16 grid grid-cols-1 gap-12 md:grid-cols-2">
-          {WHAT_IT_DOES_COPY.features.map((item, index) => (
-            <div key={item.title} className="flex gap-6">
-              <span className="text-sm text-[#737373]">0{index + 1}</span>
-              <div>
-                <h3 className="text-sm font-medium uppercase tracking-[0.1em] text-[#f0f0f0]">
-                  {item.title}
-                </h3>
-                <p className="mt-3 text-sm leading-relaxed text-[#a3a3a3]">
-                  {item.description}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
+    <Sheet className="px-6 pb-5 pt-5 md:px-8">
+      <div className="ink flex flex-col gap-1.5 text-[15px]">
+        <Line
+          left={SAMPLE_FEED.heading}
+          right={SAMPLE_FEED.footnote}
+          className="text-xs tracking-[0.14em] text-ink-faded"
+        />
+        {SAMPLE_FEED.rows.map((row) => (
+          <Line
+            key={row.time}
+            left={
+              <>
+                {row.time} {row.listing}{" "}
+                {row.sold && <span className="stamp font-jp text-[13px]">{SAMPLE_FEED.soldStamp}</span>}
+              </>
+            }
+            right={<span className={row.sold ? "line-through" : ""}>{row.price}</span>}
+            className={row.sold ? "text-ink-faded" : ""}
+          />
+        ))}
       </div>
-    </section>
+    </Sheet>
   );
 }
 
-function Presets() {
+function HowItWorksReceipt() {
   return (
-    <section
-      id="presets"
-      className="scroll-mt-24 border-t border-[#222222] px-6 py-24"
-    >
-      <div className="mx-auto max-w-6xl">
-        <h2 className="font-mono text-3xl font-light text-[#f0f0f0] md:text-4xl">
-          {PRESETS_COPY.heading}
+    <Sheet className="px-7 pb-6 pt-6 md:px-9">
+      <div className="ink flex flex-col gap-2 text-[15px]">
+        <h2 className="text-[20px] tracking-[0.06em]">
+          <span className="tall">{WHAT_IT_DOES_COPY.heading}</span>
         </h2>
-        <p className="mt-4 text-sm text-[#737373]">
-          {PRESETS_COPY.supportingLine}
-        </p>
-        <div className="mt-16 grid grid-cols-1 gap-px border border-[#222222] bg-[#222222] sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {PRESET_DESIGNER_NAMES.map((name) => (
-            <div
-              key={name}
-              className="break-words bg-[#0a0a0a] px-6 py-5 text-sm text-[#a3a3a3] transition-colors hover:bg-[#141414] hover:text-[#f0f0f0]"
-            >
-              {name}
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function Pricing() {
-  return (
-    <section
-      id="pricing"
-      className="scroll-mt-24 border-t border-[#222222] px-6 py-24"
-    >
-      <div className="mx-auto max-w-5xl">
-        <h2 className="font-mono text-3xl font-light text-[#f0f0f0] md:text-4xl">
-          {PRICING_COPY.heading}
-        </h2>
-        <div className="mt-12 max-w-md border border-[#222222] p-8">
-          <h3 className="text-sm font-medium uppercase tracking-[0.15em] text-[#f0f0f0]">
-            {PRICING_COPY.tierName}
-          </h3>
-          <ul className="mt-8 space-y-4">
-            {PRICING_COPY.included.map((item) => (
-              <li
-                key={item}
-                className="flex items-start gap-3 text-sm text-[#a3a3a3]"
-              >
-                <span className="mt-1.5 h-1 w-1 shrink-0 bg-[#f0f0f0]" />
-                {item}
-              </li>
-            ))}
-          </ul>
+        <Dashes />
+        {WHAT_IT_DOES_COPY.features.map((f) => (
+          <Line key={f.label} left={f.label} right={f.value} />
+        ))}
+        <Dashes />
+        {PRICING_COPY.included.map((f) => (
+          <Line key={f.label} left={f.label} right={f.value} />
+        ))}
+        <Dashes />
+        <Line left={PRICING_COPY.subtotal.label} right={PRICING_COPY.subtotal.value} />
+        <Line left={PRICING_COPY.tax.label} right={PRICING_COPY.tax.value} />
+        <Line
+          left={<span className="tall">{PRICING_COPY.total.label}</span>}
+          right={<span className="tall">{PRICING_COPY.total.value}</span>}
+          className="py-1.5 text-[30px]"
+        />
+        <Line left={PRICING_COPY.plan.label} right={PRICING_COPY.plan.value} />
+        <Dashes double />
+        <div id="signup-cta" className="flex flex-col items-center gap-2.5 pt-1 text-center">
+          <div className="text-[22px] leading-[1.15]">
+            <span className="tall" style={{ transformOrigin: "top center" }}>
+              {SIGNUP_CTA_COPY.heading[0]}
+              <br />
+              {SIGNUP_CTA_COPY.heading[1]}
+            </span>
+          </div>
           <Link
             href={SIGNUP_HREF}
-            className="mt-10 inline-flex w-full items-center justify-center bg-[#f0f0f0] px-6 py-3 text-xs font-medium uppercase tracking-[0.15em] text-[#0a0a0a] transition-colors hover:bg-[#c7c7c7]"
+            className="mt-2 block w-full bg-ink px-5 py-3 text-center text-[18px] text-paper-white transition-opacity hover:opacity-80"
           >
-            {PRICING_COPY.cta}
+            {SIGNUP_CTA_COPY.cta}
           </Link>
+          <Barcode value={SIGNUP_CTA_COPY.barcode} className="mt-2 text-[52px] md:text-[70px]" />
+          <div className="font-jp text-xs">{SIGNUP_CTA_COPY.thanksJa}</div>
         </div>
       </div>
-    </section>
+    </Sheet>
   );
 }
 
-function SignUpCTA() {
+function CatalogReceipt() {
   return (
-    <section
-      id="signup-cta"
-      className="scroll-mt-24 border-t border-[#222222] px-6 py-24"
-    >
-      <div className="mx-auto max-w-3xl text-center">
-        <h2 className="font-mono text-3xl font-light text-[#f0f0f0] md:text-4xl">
-          {SIGNUP_CTA_COPY.heading}
+    <Sheet className="min-w-0 px-6 pb-5 pt-6 md:px-8 lg:mt-8">
+      <div id="catalogs" className="ink flex scroll-mt-24 flex-col gap-1">
+        <h2 className="text-center text-[20px] tracking-[0.06em]">
+          <span className="tall" style={{ transformOrigin: "top center" }}>
+            {PRESETS_COPY.heading}
+          </span>
         </h2>
-        <p className="mt-4 text-sm text-[#737373]">
-          {SIGNUP_CTA_COPY.supportingLine}
-        </p>
-        <Link
-          href={SIGNUP_HREF}
-          className="mt-10 inline-flex items-center justify-center bg-[#f0f0f0] px-8 py-3 text-xs font-medium uppercase tracking-[0.15em] text-[#0a0a0a] transition-colors hover:bg-[#c7c7c7]"
-        >
-          {SIGNUP_CTA_COPY.cta}
-        </Link>
+        <div className="text-center text-xs text-ink-faded">{PRESETS_COPY.supportingLine}</div>
+        <Dashes />
+        <ul className="flex flex-col gap-0.5 text-[13px]">
+          {PRESET_CATALOG.map((preset, i) => (
+            <li key={preset.name} className="flex min-w-0 justify-between gap-3">
+              <span className="shrink-0">
+                {String(i + 1).padStart(2, "0")} {preset.name.toUpperCase()}
+              </span>
+              <span className="font-jp min-w-0 truncate text-right text-ink-faded">{preset.keyword}</span>
+            </li>
+          ))}
+        </ul>
+        <Dashes />
+        <Barcode value={PRESETS_COPY.barcode} className="text-[54px]" />
       </div>
-    </section>
+    </Sheet>
   );
 }
 
 function Footer() {
   return (
-    <footer className="border-t border-[#222222] px-6 py-8">
-      <div className="mx-auto flex max-w-6xl items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-[0.2em] text-[#f0f0f0]">
-          {PRODUCT_NAME}
-        </span>
-        <Link
-          href={SIGNUP_HREF}
-          className="text-xs uppercase tracking-[0.1em] text-[#a3a3a3] transition-colors hover:text-[#f0f0f0]"
-        >
-          {SIGNUP_CTA_COPY.cta}
-        </Link>
-      </div>
+    <footer className={`mt-16 flex items-center justify-between border-t border-ink-dim/30 pt-5 ${LABEL} text-ink-dim`}>
+      <span>{PRODUCT_NAME}</span>
+      <span>{FOOTER_COPY.tagline}</span>
     </footer>
   );
 }
