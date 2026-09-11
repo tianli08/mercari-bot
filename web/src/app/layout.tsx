@@ -1,17 +1,17 @@
 import type { Metadata } from "next";
-import { DM_Mono, Hanken_Grotesk } from "next/font/google";
+import { Libre_Barcode_128, Share_Tech_Mono } from "next/font/google";
 import "./globals.css";
 
-const hankenGrotesk = Hanken_Grotesk({
-  variable: "--font-hanken",
+const shareTechMono = Share_Tech_Mono({
+  variable: "--font-mono",
+  weight: "400",
   subsets: ["latin"],
-  weight: ["300", "400", "500"],
 });
 
-const dmMono = DM_Mono({
-  variable: "--font-dm-mono",
+const libreBarcode = Libre_Barcode_128({
+  variable: "--font-barcode",
+  weight: "400",
   subsets: ["latin"],
-  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
@@ -33,7 +33,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${hankenGrotesk.variable} ${dmMono.variable} h-full antialiased`}
+      className={`${shareTechMono.variable} ${libreBarcode.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

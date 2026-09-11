@@ -1,41 +1,35 @@
 // Canonical landing-page content
 
 export const SIGNUP_HREF = "/signup" as const;
-export const HOW_IT_WORKS_HREF = "#what-it-does" as const;
+export const HOW_IT_WORKS_HREF = "#how-it-works" as const;
+export const CATALOGS_HREF = "#catalogs" as const;
 
 export const PRODUCT_NAME = "Static Archive";
 
 export const HERO_COPY = {
+  totalLabelJa: "合計金額",
+  totalLabelEn: "TOTAL AMOUNT",
+  totalValue: "¥0",
+  plan: "FREE BETA",
   valueProposition:
-    "Real-time Mercari Japan alerts for archive fashion, delivered to Discord.",
-  primaryCta: "Sign up",
-  secondaryCta: "How it works",
-  statusLine: "Monitoring Mercari JP",
+    "REAL-TIME MERCARI JAPAN ALERTS FOR ARCHIVE FASHION, DELIVERED TO DISCORD.",
+  thanksJa: ["ご案内", "ご利用ありがとうございました", "またのご来店をお待ちしております"],
+  supportingLine: "EVERY NEW LISTING THAT MATCHES YOUR WATCHLIST PRINTS TO YOUR DISCORD.",
+  primaryCta: "[ SIGN UP ]",
+  secondaryCta: "[ HOW IT WORKS ]",
+  footerLeft: "売場 SALES COUNTER",
+  footerRight: "係員 CLERK",
+  copyLine: "お客様控 CUSTOMER COPY",
+  copyNumber: "87",
 } as const;
 
 export const WHAT_IT_DOES_COPY = {
-  heading: "What it does",
+  heading: "HOW IT WORKS",
   features: [
-    {
-      title: "Keyword watchlists",
-      description:
-        "Watch Mercari Japan with your own keywords. Add optional price and listing-status filters.",
-    },
-    {
-      title: "Shared scraping, personal delivery",
-      description:
-        "Each unique keyword is scraped once. Matching listings fan out to every account watching it.",
-    },
-    {
-      title: "Discord webhook alerts",
-      description:
-        "No bot to install. Paste a webhook URL. We run the scraper; you host nothing.",
-    },
-    {
-      title: "Preset designer catalogs",
-      description:
-        "Start from curated designer presets instead of building every watchlist from scratch.",
-    },
+    { label: "01 KEYWORD WATCHLISTS", value: "PRICE + STATUS FILTERS" },
+    { label: "02 SHARED SCRAPING", value: "ONE SCRAPE / KEYWORD" },
+    { label: "03 DISCORD WEBHOOK", value: "PASTE URL. DONE." },
+    { label: "04 PRESET CATALOGS", value: "20 DESIGNERS" },
   ],
 } as const;
 
@@ -71,48 +65,92 @@ export const PRESET_DESIGNER_NAMES = PRESET_CATALOG.map(
 export type PresetDesignerName = (typeof PRESET_CATALOG)[number]["name"];
 
 export const PRESETS_COPY = {
-  heading: "Curated designer presets, ready to watch.",
-  countLabel: `${PRESET_CATALOG.length} catalogs`,
+  heading: `CATALOG LIST · ${PRESET_CATALOG.length} PRESETS`,
+  supportingLine: "COPY ANY CATALOG INTO A WATCHLIST",
+  barcode: "CATALOG20",
 } as const;
 
-// Illustrative rows for the hero ledger. Not live data.
+// Illustrative alerts for the feed receipt. Not live data. The feed prints
+// these in order, looping, with the clock advancing by `gapSeconds`.
 export const SAMPLE_FEED = {
-  columns: ["Time", "Catalog", "Listing", "Price", "Status"],
-  footnote: "Sample feed",
+  heading: "LATEST ALERTS",
+  footnote: "SAMPLE FEED",
+  startTime: "13:40",
+  visibleRows: 5,
   rows: [
-    { time: "14:02:11", catalog: "Carol Christian Poell", listing: "CCP drip sneakers, size 42, black kangaroo", price: "¥186,000", status: "Active" },
-    { time: "14:01:47", catalog: "Boris Bidjan Saberi", listing: "BBS P13 pants, horse leather, M", price: "¥98,000", status: "Active" },
-    { time: "13:58:20", catalog: "Maison Margiela", listing: "Margiela AW98 flat garment jacket", price: "¥64,500", status: "Active" },
-    { time: "13:55:03", catalog: "Number (N)ine", listing: "Number (N)ine 2006 Noir hooded knit", price: "¥42,000", status: "Sold" },
-    { time: "13:51:39", catalog: "Rick Owens", listing: "Rick Owens Geobasket, 2012, milk", price: "¥71,000", status: "Active" },
-    { time: "13:49:12", catalog: "Undercover", listing: "Undercover SS03 Scab denim jacket", price: "¥128,000", status: "Active" },
-    { time: "13:44:58", catalog: "Julius_7", listing: "Julius_7 coated denim, size 1", price: "¥23,800", status: "Active" },
-    { time: "13:40:31", catalog: "Raf Simons", listing: "Raf Simons AW05 History of my World bomber", price: "¥340,000", status: "Sold" },
+    { listing: "RAF SIMONS AW05 HISTORY BOMBER", price: "¥340,000", sold: true, gapSeconds: 0 },
+    { listing: "JULIUS_7 COATED DENIM SZ 1", price: "¥23,800", sold: false, gapSeconds: 267 },
+    { listing: "UNDERCOVER SS03 SCAB DENIM JKT", price: "¥128,000", sold: false, gapSeconds: 254 },
+    { listing: "RICK OWENS GEOBASKET 2012 MILK", price: "¥71,000", sold: false, gapSeconds: 147 },
+    { listing: "N(N)INE NOIR KNIT 2006", price: "¥42,000", sold: true, gapSeconds: 204 },
+    { listing: "MARGIELA AW98 FLAT GARMENT JKT", price: "¥64,500", sold: false, gapSeconds: 197 },
+    { listing: "BBS P13 PANTS HORSE LEATHER M", price: "¥98,000", sold: false, gapSeconds: 207 },
+    { listing: "CCP DRIP SNEAKER 42 BLACK", price: "¥186,000", sold: false, gapSeconds: 24 },
+    { listing: "KAPITAL BORO SASHIKO JKT 3", price: "¥58,000", sold: false, gapSeconds: 311 },
+    { listing: "ANN D. 3-BUCKLE BOOTS 41", price: "¥76,000", sold: false, gapSeconds: 188 },
+    { listing: "THESOLOIST ZIP JKT 48", price: "¥112,000", sold: true, gapSeconds: 243 },
+    { listing: "DIOR HOMME 04 JKT 46", price: "¥89,000", sold: false, gapSeconds: 156 },
   ],
+  soldStamp: "済 SOLD",
 } as const;
 
-export type SampleFeedRow = (typeof SAMPLE_FEED.rows)[number];
+export type SampleAlert = (typeof SAMPLE_FEED.rows)[number];
 
 export const PRICING_COPY = {
-  heading: "Pricing",
-  tierName: "Free beta",
-  priceLine: "¥0 · while in beta",
   included: [
-    "Hosted Mercari Japan monitoring",
-    "Keyword watchlists with price and listing-status filters",
-    "Discord webhook alerts, no bot to install",
-    "Curated designer presets",
-    "Up to 100 keywords per account",
+    { label: "HOSTED MONITORING", value: "¥0" },
+    { label: "WATCHLISTS + FILTERS", value: "¥0" },
+    { label: "DISCORD WEBHOOK ALERTS", value: "¥0" },
+    { label: "100 KEYWORDS / ACCOUNT", value: "¥0" },
   ],
-  cta: "Sign up",
+  subtotal: { label: "SUBTOTAL", value: "¥0" },
+  tax: { label: "TAX (10%)", value: "¥0" },
+  total: { label: "TOTAL", value: "¥0" },
+  plan: { label: "PLAN", value: "FREE BETA" },
 } as const;
 
 export const SIGNUP_CTA_COPY = {
-  heading: "Start watching Mercari Japan.",
-  supportingLine: "Create an account and send alerts to your Discord webhook.",
-  cta: "Sign up",
+  heading: ["START WATCHING", "MERCARI JAPAN."],
+  cta: "[ SIGN UP ]",
+  barcode: "STATICARCHIVE0917",
+  thanksJa: "ご利用ありがとうございました",
 } as const;
 
 export const FOOTER_COPY = {
-  tagline: "Mercari JP · Discord webhooks",
+  tagline: "MERCARI JP · DISCORD WEBHOOKS",
 } as const;
+
+// Recycled receipts the hero loop prints on. Shops are fictional. Frame images
+// come from whatever is in public/frames (see lib/receipt-frames.ts); each
+// image is paired with the next template here, cycling as needed.
+export type PaperTint = "white" | "grey" | "pink";
+
+export interface ReceiptFrame {
+  image: string;
+  tint: PaperTint;
+  shop: string;
+  address: string;
+  datetime: string;
+  register: string;
+  items: ReadonlyArray<readonly [string, string]>;
+  total: string;
+  tax: string;
+  member: string;
+  approval: string;
+  slip: string;
+  /** Vertical offset of the receipt inside the square, in px at 680. */
+  offset: number;
+}
+
+export type ReceiptTemplate = Omit<ReceiptFrame, "image">;
+
+export const RECEIPT_TEMPLATES: readonly ReceiptTemplate[] = [
+  { tint: "white", shop: "SAMPLE STORE 1 渋谷店", address: "東京都渋谷区道玄坂2-6-17", datetime: "2026年08月14日(木) 21:07", register: "レジ#2 No.1749", items: [["ドリア", "¥300"], ["ドリンクバー", "¥200"], ["小エビのサラダ", "¥350"]], total: "¥850", tax: "¥68", member: "************1749", approval: "449318", slip: "250-626-278-1810", offset: -40 },
+  { tint: "pink", shop: "STATIC STORE 下北沢", address: "世田谷区北沢2-25-8", datetime: "2026年08月15日(金) 13:42", register: "レジ#1 No.1762", items: [["古着 ジャケット", "¥6,800"], ["ハンガー", "¥110"]], total: "¥6,910", tax: "¥552", member: "************1750", approval: "449325", slip: "250-626-279-1810", offset: -3 },
+  { tint: "grey", shop: "SAMPLE STORE 2 新宿店", address: "新宿区新宿3-17-5", datetime: "2026年08月15日(金) 18:20", register: "レジ#2 No.1775", items: [["からあげ", "¥238"], ["緑茶 525ml", "¥140"], ["レジ袋", "¥5"]], total: "¥383", tax: "¥30", member: "************1751", approval: "449332", slip: "250-626-280-1810", offset: 34 },
+  { tint: "white", shop: "古着屋 セカンド 高円寺", address: "杉並区高円寺南4-27", datetime: "2026年08月16日(土) 15:03", register: "レジ#1 No.1788", items: [["デニム 中古", "¥12,000"], ["ベルト", "¥1,500"]], total: "¥13,500", tax: "¥1,080", member: "************1752", approval: "449339", slip: "250-626-281-1810", offset: -19 },
+  { tint: "white", shop: "SAMPLE STORE 3 原宿店", address: "渋谷区神宮前6-1-9", datetime: "2026年08月16日(土) 19:51", register: "レジ#2 No.1801", items: [["長袖シャツ", "¥990"], ["ソックス", "¥390"]], total: "¥1,380", tax: "¥110", member: "************1753", approval: "449346", slip: "250-626-282-1810", offset: 18 },
+  { tint: "grey", shop: "SAMPLE STORE 4 中野店", address: "中野区中野5-52", datetime: "2026年08月17日(日) 11:30", register: "レジ#2 No.1814", items: [["雑誌 バックナンバー", "¥420"], ["写真集", "¥1,980"]], total: "¥2,400", tax: "¥192", member: "************1754", approval: "449353", slip: "250-626-283-1810", offset: -30 },
+  { tint: "pink", shop: "STATIC STORE 代官山", address: "渋谷区代官山町17-6", datetime: "2026年08月17日(日) 16:12", register: "レジ#1 No.1827", items: [["スニーカー 中古", "¥28,000"]], total: "¥28,000", tax: "¥2,240", member: "************1755", approval: "449360", slip: "250-626-284-1810", offset: 7 },
+  { tint: "white", shop: "SAMPLE STORE 5 池袋店", address: "豊島区南池袋1-28", datetime: "2026年08月18日(月) 07:55", register: "レジ#2 No.1840", items: [["おにぎり 梅", "¥140"], ["水 500ml", "¥110"], ["ガム", "¥130"]], total: "¥380", tax: "¥30", member: "************1756", approval: "449367", slip: "250-626-285-1810", offset: 44 },
+];
