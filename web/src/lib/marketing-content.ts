@@ -23,8 +23,6 @@ export const HERO_COPY = {
   copyNumber: "87",
 } as const;
 
-export const HERO_LOOP_LABEL = "● LIVE · MERCARI JP → DISCORD";
-
 export const WHAT_IT_DOES_COPY = {
   heading: "HOW IT WORKS",
   features: [

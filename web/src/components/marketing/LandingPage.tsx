@@ -16,7 +16,6 @@ import {
   SIGNUP_CTA_COPY,
   SIGNUP_HREF,
   WHAT_IT_DOES_COPY,
-  HERO_LOOP_LABEL,
 } from "@/lib/marketing-content";
 import { getReceiptFrames } from "@/lib/receipt-frames";
 
@@ -33,7 +32,7 @@ export function LandingPage() {
       <SnappyAnchors />
       <Header />
       <main className="mx-auto max-w-[1440px] px-5 pb-20 md:px-16">
-        <ReceiptFrames frames={frames} loopLabel={HERO_LOOP_LABEL}>
+        <ReceiptFrames frames={frames}>
           <HeadlineReceipt />
           <ReceiptFeed />
         </ReceiptFrames>

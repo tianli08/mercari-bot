@@ -10,10 +10,11 @@ import {
   type ThermalPrintOptions,
 } from "@/lib/thermal-print/shader";
 
-/** Hero prints are rendered at this width; the receipt text scales from it. */
+/** Reference width for the receipt text under the print; text scales from it. */
 const HERO_SIZE = 680;
-/** Portrait height for the hero print so it can cover a tall frame without upscaling much. */
-const HERO_PRINT_HEIGHT = 1040;
+/** Hero print render size: near-square so a near-square frame crops little. */
+const HERO_PRINT_WIDTH = 840;
+const HERO_PRINT_HEIGHT = 920;
 const STRIP_SIZE = 160;
 const FRAME_MS = 300;
 /** Width the optimizer serves the source photo at. Must be in Next's deviceSizes. */
@@ -92,7 +93,7 @@ function useThermalFrames(frames: readonly ReceiptFrame[]): FramePrints {
         }
         if (cancelled) return;
         const seed = 7 + i * 11;
-        const hero = printAt(image, HERO_SIZE, HERO_PRINT_HEIGHT, seed);
+        const hero = printAt(image, HERO_PRINT_WIDTH, HERO_PRINT_HEIGHT, seed);
         const strip = printAt(image, STRIP_SIZE, STRIP_SIZE, seed);
         setPrints((prev) => {
           const next = { hero: [...prev.hero], strip: [...prev.strip] };
@@ -300,11 +301,9 @@ function ScannedFrame({
  */
 export function ReceiptFrames({
   frames,
-  loopLabel,
   children,
 }: {
   frames: readonly ReceiptFrame[];
-  loopLabel: string;
   children: ReactNode;
 }) {
   const prints = useThermalFrames(frames);
@@ -334,21 +333,16 @@ export function ReceiptFrames({
 
   return (
     <>
-      <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-stretch lg:gap-10 xl:grid-cols-[680px_minmax(0,1fr)] xl:gap-14">
+      <section className="mt-12 grid grid-cols-1 items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-stretch lg:gap-10 xl:grid-cols-[minmax(0,1fr)_480px] xl:gap-14">
         {frames.length > 0 && (
-          <div className="flex w-full max-w-[680px] flex-col lg:max-w-none">
-            {/* Square on small screens; on large ones stretches to the receipts beside it. */}
-            <div ref={heroRef} className="relative aspect-square w-full lg:aspect-auto lg:flex-1">
-              <ScannedFrame
-                frame={frames[current]}
-                print={prints.hero[current]}
-                scale={scale}
-                index={current}
-              />
-            </div>
-            <div className="mt-3 text-[11px] uppercase tracking-[0.16em] text-ink-dim">
-              {loopLabel}
-            </div>
+          /* Square on small screens; on large ones fills the height of the receipts beside it. */
+          <div ref={heroRef} className="relative aspect-square w-full max-w-[680px] lg:aspect-auto lg:max-w-none">
+            <ScannedFrame
+              frame={frames[current]}
+              print={prints.hero[current]}
+              scale={scale}
+              index={current}
+            />
           </div>
         )}
         <div className="flex min-w-0 flex-col gap-6">{children}</div>
