@@ -38,11 +38,11 @@ const SLIDERS: Array<{
 ];
 
 const SAMPLE_RECEIPT = [
-  ["ユニクロ 原宿店", ""],
+  ["SAMPLE STORE 原宿店", ""],
   ["渋谷区神宮前6-1-9  TEL 03-0000-0000", ""],
   ["2026年08月16日(土) 19:51  レジ#2 No.1801", ""],
   ["------------------------------------------", ""],
-  ["ヒートテック", "¥990"],
+  ["長袖シャツ", "¥990"],
   ["ソックス", "¥390"],
   ["------------------------------------------", ""],
   ["小　計（税抜 8%）", "¥1,380"],
@@ -159,14 +159,6 @@ export default function PrintLab() {
               onChange={(e) => takeFile(e.target.files?.[0])}
             />
           </label>
-
-          <button
-            type="button"
-            onClick={() => setSrc("/lab-sample.jpg")}
-            className="border border-[#3a3835] px-3 py-2 uppercase tracking-[0.14em] text-[#a9a59c] transition-colors hover:border-[#8a877f] hover:text-[#e8e6e1]"
-          >
-            Use the sample photo
-          </button>
 
           <form
             className="flex gap-2"
