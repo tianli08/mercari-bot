@@ -2,8 +2,15 @@ import Link from "next/link";
 
 import { PRODUCT_NAME } from "@/lib/marketing-content";
 
-/** The glitch-block mark: three bands, the middle one slipped. Inherits `currentColor`. */
+/**
+ * The glitch-block mark: three bands, the middle one slipped. Inherits
+ * `currentColor`. At 24px and below the gaps widen so the bands stay
+ * separate; the geometry is otherwise identical.
+ */
 export function Mark({ size = 18, className = "" }: { size?: number; className?: string }) {
+  const small = size <= 24;
+  const h = small ? 22 : 24;
+  const ys = small ? [10, 39, 68] : [10, 38, 66];
   return (
     <svg
       viewBox="0 0 100 100"
@@ -14,9 +21,9 @@ export function Mark({ size = 18, className = "" }: { size?: number; className?:
       focusable="false"
     >
       <g fill="currentColor">
-        <rect x="10" y="10" width="68" height="24" />
-        <rect x="22" y="38" width="68" height="24" />
-        <rect x="10" y="66" width="68" height="24" />
+        <rect x="10" y={ys[0]} width="68" height={h} />
+        <rect x="22" y={ys[1]} width="68" height={h} />
+        <rect x="10" y={ys[2]} width="68" height={h} />
       </g>
     </svg>
   );
@@ -24,7 +31,7 @@ export function Mark({ size = 18, className = "" }: { size?: number; className?:
 
 /** Mark plus wordmark, linking home. Text stays live for accessibility. */
 export function Logo({
-  size = 18,
+  size = 13,
   className = "",
   href = "/",
 }: {

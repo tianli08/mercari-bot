@@ -194,7 +194,7 @@ function Footer() {
   return (
     <footer className={`mt-16 flex items-center justify-between border-t border-ink-dim/30 pt-5 ${LABEL} text-ink-dim`}>
       <span className="inline-flex items-center gap-2.5">
-        <Mark size={14} />
+        <Mark size={12} />
         {PRODUCT_NAME}
       </span>
       <span>{FOOTER_COPY.tagline}</span>

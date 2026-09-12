@@ -8,6 +8,7 @@ The mark is the glitch block: a solid slab of three bands with the middle band s
 |---|---|
 | `mark.svg` | the mark in ink, transparent background. Default everywhere on paper. |
 | `mark-paper.svg` | the mark in paper, for ink or photographic backgrounds. |
+| `mark-small.svg` | optical size for 24 px and below: bands 22 tall, gaps 7, so they never fuse. Used by the favicon and the site header. |
 | `mark-tile.svg` | paper mark on an ink tile. App icons, avatars, anywhere a square is required. |
 | `favicon.svg` | the mark with a `prefers-color-scheme` swap so it stays visible on dark browser chrome. |
 | `favicon.ico` | 16, 32, 48 px, for browsers that ignore SVG favicons. |
@@ -35,7 +36,7 @@ Wordmark is Share Tech Mono, all caps, tracked at 0.18 em. In the lockup the mar
 
 ## Clear space and minimum size
 
-Keep clear space around the mark equal to the height of one band (24 units, roughly a quarter of the mark). Minimum size 16 px; below that use the tile.
+Keep clear space around the mark equal to the height of one band (24 units, roughly a quarter of the mark). Use `mark-small.svg` at 24 px and below. Minimum size 16 px; below that use the tile.
 
 ## Site
 
