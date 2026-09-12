@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { ReceiptFrames } from "@/components/marketing/ReceiptFrames";
+import { Logo, Mark } from "@/components/marketing/Logo";
 import { ReceiptFeed } from "@/components/marketing/ReceiptFeed";
 import { Barcode, Dashes, Line, Sheet } from "@/components/marketing/Sheet";
 import { SnappyAnchors } from "@/components/marketing/SnappyAnchors";
@@ -52,7 +53,7 @@ export function LandingPage() {
 function Header() {
   return (
     <header className="mx-auto flex max-w-[1440px] items-center justify-between px-5 pt-9 md:px-16">
-      <span className={LABEL}>{PRODUCT_NAME}</span>
+      <Logo />
       <nav className={`flex gap-5 md:gap-7 ${LABEL}`}>
         <a href={HOW_IT_WORKS_HREF} className="hidden hover:opacity-70 sm:inline">
           How it works
@@ -192,7 +193,10 @@ function CatalogReceipt() {
 function Footer() {
   return (
     <footer className={`mt-16 flex items-center justify-between border-t border-ink-dim/30 pt-5 ${LABEL} text-ink-dim`}>
-      <span>{PRODUCT_NAME}</span>
+      <span className="inline-flex items-center gap-2.5">
+        <Mark size={12} />
+        {PRODUCT_NAME}
+      </span>
       <span>{FOOTER_COPY.tagline}</span>
     </footer>
   );
