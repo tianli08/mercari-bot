@@ -15,7 +15,7 @@ uv run uvicorn src.api.app:app --reload
 uv run python -m src.api_main
 ```
 
-The web app lives in `web/` (Node 22, npm). API-dependent behavior expects the backend running above. The public landing page lives in `web/src/app/(marketing)/`. Visual redesigns are iterated in Lovable and ported into the repo; copy edits and small fixes go straight into the repo. Lovable is a design springboard, not a synced mirror.
+The web app lives in `web/` (Node 22, npm). API-dependent behavior expects the backend running above. The public landing page lives in `web/src/app/(marketing)/`.
 
 ```bash
 cd web
@@ -26,3 +26,5 @@ npm run build                # production build
 ```
 
 ## Currently INFRA is being developed.
+
+https://www.archivestatic.com/
