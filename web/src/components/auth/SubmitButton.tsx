@@ -2,6 +2,8 @@
 
 import type { ButtonHTMLAttributes } from "react";
 
+import { PRIMARY_BUTTON_CLASS_NAME } from "@/lib/ui-styles";
+
 type SubmitButtonProps = {
   /** Whether a request is currently in flight. Disables the button and shows pending state. */
   pending?: boolean;
@@ -16,15 +18,17 @@ export function SubmitButton({ pending = false, children, className = "", ...res
     <button
       type="submit"
       disabled={pending}
+      aria-busy={pending}
       className={[
-        "w-full border-2 border-ink bg-ink px-4 py-2.5 text-[15px] uppercase tracking-[0.12em] text-paper-white",
-        "transition-opacity hover:opacity-80",
+        PRIMARY_BUTTON_CLASS_NAME,
+        "w-full rounded-none uppercase",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink",
         "disabled:cursor-not-allowed disabled:opacity-50",
         className,
       ].join(" ")}
       {...rest}
     >
-      {pending ? "···" : children}
+      {pending ? <span role="status">Please wait…</span> : children}
     </button>
   );
 }

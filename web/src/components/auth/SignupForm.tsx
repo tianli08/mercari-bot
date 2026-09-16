@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/api";
 import { signup, MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH } from "@/lib/auth-api";
 import { FormField } from "@/components/auth/FormField";
 import { SubmitButton } from "@/components/auth/SubmitButton";
+import { Dashes } from "@/components/marketing/Sheet";
 
 /** Maps API error codes to user-facing inline messages. */
 function errorMessage(error: ApiError): string {
@@ -88,13 +89,11 @@ export function SignupForm() {
 
   return (
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-5">
-      <h1 className="ink text-center text-[15px] uppercase tracking-[0.16em]">
-        Sign up
+      <h1 className="ink text-center text-[20px] uppercase tracking-[0.06em]">
+        <span className="tall-block tall-block-center">Sign up</span>
       </h1>
 
-      <div className="dashes" aria-hidden>
-        {"- ".repeat(40)}
-      </div>
+      <Dashes />
 
       <FormField
         label="Email"
