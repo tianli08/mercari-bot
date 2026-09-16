@@ -20,7 +20,7 @@ export function FormField({ label, helper, error, className = "", ...rest }: For
   const helperId = `${id}-helper`;
   const errorId = `${id}-error`;
 
-  const describedBy = [helper ? helperId : null, error ? errorId : null]
+  const describedBy = [helper && !error ? helperId : null, error ? errorId : null]
     .filter(Boolean)
     .join(" ") || undefined;
 
@@ -37,7 +37,7 @@ export function FormField({ label, helper, error, className = "", ...rest }: For
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
         className={[
-          "w-full border-2 border-ink bg-paper-white px-3 py-2 text-[15px] text-ink",
+          "w-full rounded-none border-2 border-ink bg-paper-white px-3 py-2 text-[16px] text-ink",
           "placeholder:text-ink-faded",
           "focus:outline-none focus:ring-2 focus:ring-ink focus:ring-offset-2 focus:ring-offset-background",
           error ? "border-stamp" : "",

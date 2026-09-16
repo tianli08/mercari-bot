@@ -19,10 +19,9 @@ import {
   WHAT_IT_DOES_COPY,
 } from "@/lib/marketing-content";
 import { getReceiptFrames } from "@/lib/receipt-frames";
+import { PRIMARY_BUTTON_CLASS_NAME } from "@/lib/ui-styles";
 
 const LABEL = "text-[11px] uppercase tracking-[0.16em]";
-const BUTTON_PRIMARY =
-  "inline-block border-2 border-ink bg-ink px-4 py-2 text-[17px] text-paper-white transition-opacity hover:opacity-80";
 const BUTTON_SECONDARY =
   "inline-block border-2 border-ink px-4 py-2 text-[17px] text-ink transition-opacity hover:opacity-70";
 
@@ -93,7 +92,7 @@ function HeadlineReceipt() {
         </div>
         <p className="max-w-[420px] text-sm leading-normal">{HERO_COPY.supportingLine}</p>
         <div className="mt-2 flex flex-wrap gap-2.5">
-          <Link href={SIGNUP_HREF} className={BUTTON_PRIMARY}>
+          <Link href={SIGNUP_HREF} className={PRIMARY_BUTTON_CLASS_NAME}>
             {HERO_COPY.primaryCta}
           </Link>
           <a href={HOW_IT_WORKS_HREF} className={BUTTON_SECONDARY}>
