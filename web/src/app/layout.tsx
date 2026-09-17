@@ -1,3 +1,5 @@
+import { ClerkProvider } from "@clerk/nextjs";
+import { clerkAppearance } from "@/lib/clerk-appearance";
 import type { Metadata } from "next";
 import { Libre_Barcode_128, Share_Tech_Mono } from "next/font/google";
 import "./globals.css";
@@ -35,7 +37,21 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${shareTechMono.variable} ${libreBarcode.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <ClerkProvider
+          signInUrl="/login"
+          signUpUrl="/signup"
+          signInFallbackRedirectUrl="/dashboard"
+          signUpFallbackRedirectUrl="/dashboard?welcome=1"
+          appearance={clerkAppearance}
+          localization={{
+            signIn: { start: { title: "Log in to Static Archive" } },
+            signUp: { start: { title: "Create your account" } },
+          }}
+        >
+          {children}
+        </ClerkProvider>
+      </body>
     </html>
   );
 }
