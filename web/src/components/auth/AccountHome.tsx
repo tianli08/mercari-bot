@@ -7,6 +7,8 @@ import { getCurrentUser, type PublicUser } from "@/lib/auth-api";
 import { ApiError } from "@/lib/api";
 import { AuthHeading } from "./AuthHeading";
 
+const hasApplicationApi = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim());
+
 export function AccountHome() {
   const { isLoaded, userId, getToken } = useAuth();
   const { user: clerkUser } = useUser();
@@ -15,7 +17,7 @@ export function AccountHome() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isLoaded || !userId) return;
+    if (!hasApplicationApi || !isLoaded || !userId) return;
     let cancelled = false;
     async function loadAccount() {
       try {
@@ -42,8 +44,8 @@ export function AccountHome() {
     {error ? <div className="flex flex-col gap-4">
       <p role="alert" className="text-[13px] text-stamp">{error}</p>
       <button type="button" onClick={() => window.location.reload()} className="text-[13px] underline">Try again</button>
-    </div> : account ? <>
-      {welcome && <p role="status" className="text-[13px] text-ink-dim">Your account is ready.</p>}
+    </div> : account || (!hasApplicationApi && isLoaded && userId) ? <>
+      {welcome && <p role="status" className="text-[13px] text-ink-dim">{account ? "Your account is ready." : "You’re signed in."}</p>}
       <p className="text-[13px] text-ink-dim">Use your profile menu to manage your email, password, and signed-in devices.</p>
     </> : <p role="status" className="text-[13px] text-ink-dim">Loading your account…</p>}
     <SignOutButton redirectUrl="/login">
