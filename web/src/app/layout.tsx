@@ -46,7 +46,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           appearance={clerkAppearance}
           localization={{
             signIn: { start: { title: "Log in to Static Archive" } },
-            signUp: { start: { title: "Create your account" } },
+            signUp: {
+              start: { title: "Create your account" },
+              emailCode: { title: "Check your inbox", subtitle: "Enter the verification code sent to your email." },
+              emailLink: { title: "Check your inbox", subtitle: "Follow the verification link sent to your email." },
+            },
           }}
         >
           {children}
