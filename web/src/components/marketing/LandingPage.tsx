@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AuthControls } from "@/components/auth/AuthControls";
 
 import { ReceiptFrames } from "@/components/marketing/ReceiptFrames";
 import { Logo, Mark } from "@/components/marketing/Logo";
@@ -53,16 +54,14 @@ function Header() {
   return (
     <header className="mx-auto flex max-w-[1440px] items-center justify-between px-5 pt-9 md:px-16">
       <Logo />
-      <nav className={`flex gap-5 md:gap-7 ${LABEL}`}>
+      <nav className={`flex items-center gap-5 md:gap-7 ${LABEL}`}>
         <a href={HOW_IT_WORKS_HREF} className="hidden hover:opacity-70 sm:inline">
           How it works
         </a>
         <a href={CATALOGS_HREF} className="hidden hover:opacity-70 sm:inline">
           Catalogs
         </a>
-        <Link href={SIGNUP_HREF} className="border-b border-ink hover:opacity-70">
-          Sign up
-        </Link>
+        <AuthControls />
       </nav>
     </header>
   );
