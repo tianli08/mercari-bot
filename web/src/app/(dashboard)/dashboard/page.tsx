@@ -12,11 +12,11 @@ export const metadata: Metadata = {
 
 export default function DashboardPage() {
   return (
-    <div className="flex min-h-screen flex-col items-center bg-background px-5 pt-16 pb-12 text-foreground">
-      <Logo className="mb-10" />
+    <div className="flex min-h-svh flex-col items-center justify-center gap-8 bg-background px-5 py-12 text-foreground">
+      <Logo />
       <main className="w-full max-w-[400px]">
-        <Sheet className="px-7 py-7 md:px-9">
-          <Suspense fallback={<p role="status">Loading your account…</p>}><AccountHome /></Suspense>
+        <Sheet className="px-6 py-8 sm:px-9 sm:py-10">
+          <Suspense fallback={<p role="status" className="text-center text-[13px] text-ink-dim">Loading your account…</p>}><AccountHome /></Suspense>
         </Sheet>
       </main>
     </div>

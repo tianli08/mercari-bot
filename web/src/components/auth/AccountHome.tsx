@@ -35,21 +35,28 @@ export function AccountHome() {
     return () => { cancelled = true; };
   }, [isLoaded, userId, getToken]);
 
-  return <div className="flex flex-col gap-5">
-    <div className="flex items-center justify-between gap-4">
+  return <div className="flex min-w-0 flex-col gap-6 text-center text-[13px] leading-relaxed">
+    <div className="flex min-w-0 flex-col gap-4">
       <AuthHeading>Your account</AuthHeading>
-      <UserButton />
     </div>
-    <p className="text-[13px] text-ink-dim">Signed in as <span className="break-all text-ink">{clerkUser?.primaryEmailAddress?.emailAddress}</span></p>
+    <div className="flex min-w-0 flex-col items-center gap-3">
+      <div className="flex size-11 items-center justify-center">
+        <UserButton appearance={{ elements: { avatarBox: "size-11" } }} />
+      </div>
+      <p className="w-full text-ink-dim">
+        <span className="block">Signed in as</span>
+        <span className="mt-1 block text-ink [overflow-wrap:anywhere]">{clerkUser?.primaryEmailAddress?.emailAddress}</span>
+      </p>
+    </div>
     {error ? <div className="flex flex-col gap-4">
       <p role="alert" className="text-[13px] text-stamp">{error}</p>
-      <button type="button" onClick={() => window.location.reload()} className="text-[13px] underline">Try again</button>
+      <button type="button" onClick={() => window.location.reload()} className="min-h-11 self-center px-4 underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink">Try again</button>
     </div> : account || (!hasApplicationApi && isLoaded && userId) ? <>
       {welcome && <p role="status" className="text-[13px] text-ink-dim">{account ? "Your account is ready." : "You’re signed in."}</p>}
       <p className="text-[13px] text-ink-dim">Use your profile menu to manage your email, password, and signed-in devices.</p>
     </> : <p role="status" className="text-[13px] text-ink-dim">Loading your account…</p>}
     <SignOutButton redirectUrl="/login">
-      <button type="button" className="text-[13px] underline">Log out</button>
+      <button type="button" className="min-h-11 w-full border border-ink/25 px-4 py-2 text-ink transition-colors hover:border-ink/50 hover:bg-ink/5 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink">Log out</button>
     </SignOutButton>
   </div>;
 }
