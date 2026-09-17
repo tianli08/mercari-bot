@@ -47,8 +47,10 @@ cd ../backend
 clerk env pull --app <application-id> --instance dev --file .env.clerk
 ```
 
-The frontend needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, and
-`NEXT_PUBLIC_API_BASE_URL` (normally `http://localhost:8000/api/v1`).
+The frontend needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`.
+Set `NEXT_PUBLIC_API_BASE_URL` (normally `http://localhost:8000/api/v1`) when the
+application backend is available. Without it, Clerk sign-in and profile management
+work independently; no application API requests or MongoDB provisioning occur.
 The backend reads `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` from its ignored
 `.env.clerk` file or the process environment. Its existing MongoDB and worker
 configuration is still required. Restart the API after changing configuration.
@@ -75,3 +77,17 @@ both services. Set `API_ENVIRONMENT=production` and both origin lists to the
 actual HTTPS frontend origins, such as `https://www.archivestatic.com`. Include
 `https://archivestatic.com` only if the frontend is also served there. Local
 setup uses development keys and does not configure or deploy production.
+
+Frontend builds require both Clerk keys in the hosting environment. Vercel
+production builds require production Clerk keys. The optional API URL must use
+HTTPS and point to a deployed server in production. These checks stop an unconfigured build
+before it replaces the live site; a successful build alone does not verify the
+runtime configuration, DNS, or external services. Run the deployment checks with
+`cd web && node --test tests/deployment-config.test.mjs`.
+
+Complete Clerk production DNS, certificates, and Google OAuth credentials before
+promoting a deployment. Use separate development and production application
+databases, or explicitly migrate existing Clerk account mappings: users have
+different Clerk IDs in each instance. Check the public homepage and login page
+after deployment, then verify a complete sign-in. Once the backend is deployed,
+set its URL in the frontend environment and verify account provisioning through it.
