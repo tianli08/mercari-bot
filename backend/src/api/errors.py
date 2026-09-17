@@ -17,10 +17,10 @@ from ..destinations import (
 )
 from ..logging_utils import get_logger
 from ..presets import PresetNotFoundError
-from ..users import EmailAlreadyExistsError
+from ..users import ClerkAccountConflictError
 from ..watchlists import WatchlistNameExistsError, WatchlistNotFoundError
 from ..webhook_errors import WebhookDeliveryError, WebhookPermanentError, WebhookTransientError
-from .auth.exceptions import AuthenticationRequiredError, InvalidCredentialsError, RateLimitedError
+from .auth.exceptions import AuthenticationRequiredError, AuthenticationUnavailableError
 from .schemas import ErrorResponse
 
 _logger = get_logger("api")
@@ -30,8 +30,12 @@ _ErrorHandler = Callable[[Request, Exception], Awaitable[JSONResponse]]
 def register_exception_handlers(app: FastAPI) -> None:
     """Register public, secret-safe responses for domain and unexpected errors."""
     app.add_exception_handler(
-        EmailAlreadyExistsError,
-        _build_error_handler(409, "An account with this email already exists", "email_exists"),
+        AuthenticationUnavailableError,
+        _build_error_handler(503, "Authentication service is temporarily unavailable", "authentication_unavailable"),
+    )
+    app.add_exception_handler(
+        ClerkAccountConflictError,
+        _build_error_handler(403, "This account cannot access the application", "account_unavailable"),
     )
     app.add_exception_handler(
         WatchlistNameExistsError,
@@ -86,21 +90,13 @@ def register_exception_handlers(app: FastAPI) -> None:
         _build_error_handler(502, "Webhook verification failed", "webhook_verification_failed"),
     )
     app.add_exception_handler(
-        RateLimitedError,
-        _build_error_handler(
-            429,
-            "Too many requests",
-            "rate_limited",
-            header_factory=_retry_after_headers,
-        ),
-    )
-    app.add_exception_handler(
-        InvalidCredentialsError,
-        _build_error_handler(401, "Invalid email or password", "invalid_credentials"),
-    )
-    app.add_exception_handler(
         AuthenticationRequiredError,
-        _build_error_handler(401, "Authentication required", "authentication_required"),
+        _build_error_handler(
+            401,
+            "Authentication required",
+            "authentication_required",
+            header_factory=lambda _: {"WWW-Authenticate": "Bearer"},
+        ),
     )
     app.add_exception_handler(
         RequestValidationError,
@@ -125,16 +121,6 @@ def _build_error_handler(
         return _error_response(status_code, detail, code, headers=headers)
 
     return handler
-
-
-def _retry_after_headers(exc: Exception) -> dict[str, str]:
-    """Build the Retry-After header required by auth rate-limit responses."""
-    retry_after = getattr(exc, "retry_after_seconds", 1)
-    try:
-        seconds = max(1, int(retry_after))
-    except (TypeError, ValueError):
-        seconds = 1
-    return {"Retry-After": str(seconds)}
 
 
 async def _unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:

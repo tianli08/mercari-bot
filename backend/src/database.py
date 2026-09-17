@@ -37,7 +37,7 @@ from .keyword_registry import (
 from .limits import resolve_tenant_limits
 from .listings import ListingRecord, Marketplace
 from .presets import PresetKeywordRecord, PresetNameExistsError, PresetNotFoundError
-from .users import EmailAlreadyExistsError, UserPlan, UserRecord, UserStatus, normalize_email
+from .users import ClerkAccountConflictError, UserPlan, UserRecord, UserStatus, normalize_email
 from .watchlists import (
     WatchlistFilters,
     WatchlistNameExistsError,
@@ -130,6 +130,7 @@ class DatabaseClient:
         )
         await self.users.create_index("email", unique=True, name="users_email_unique")
         await self.users.create_index("status", name="users_status_idx")
+        await self.users.create_index("clerk_user_id", unique=True, sparse=True, name="users_clerk_id_unique")
         await self.watchlists.create_index("owner_id", name="watchlists_owner_idx")
         await self.watchlists.create_index(
             [("owner_id", ASCENDING), ("name", ASCENDING)],
@@ -393,31 +394,6 @@ async def _apply_watchlist_delete(selector: dict[str, Any], *, session: Any) -> 
     return True
 
 
-async def create_user(
-    email: str,
-    password_hash: str,
-    *,
-    status: UserStatus | str = UserStatus.ACTIVE,
-    plan: UserPlan | str = UserPlan.FREE,
-    created_at: datetime | None = None,
-) -> UserRecord:
-    """Create a tenant user and return the inserted record."""
-    await db_client.ensure_indexes()
-
-    user = UserRecord.new(
-        email=email,
-        password_hash=password_hash,
-        status=status,
-        plan=plan,
-        created_at=created_at,
-    )
-    try:
-        await db_client.users.insert_one(user.to_document())
-    except DuplicateKeyError as exc:
-        raise EmailAlreadyExistsError(normalize_email(email)) from exc
-    return user
-
-
 async def get_user_by_id(tenant_id: str) -> UserRecord | None:
     """Return a tenant user by stable tenant id."""
     await db_client.ensure_indexes()
@@ -428,14 +404,50 @@ async def get_user_by_id(tenant_id: str) -> UserRecord | None:
     return _document_to_user(document)
 
 
-async def get_user_by_email(email: str) -> UserRecord | None:
-    """Return a tenant user by normalized email address."""
+async def get_user_by_clerk_id(clerk_user_id: str) -> UserRecord | None:
+    """Resolve an immutable provider identity to its application account."""
     await db_client.ensure_indexes()
+    document = await db_client.users.find_one({"clerk_user_id": clerk_user_id})
+    return _document_to_user(document) if document else None
 
-    document = await db_client.users.find_one({"email": normalize_email(email)})
-    if document is None:
-        return None
-    return _document_to_user(document)
+
+async def link_clerk_user(clerk_user_id: str, verified_email: str) -> UserRecord:
+    """Claim an unlinked tenant using a provider-verified email, or create one.
+
+    This is called only after Clerk session and primary-email verification.
+    Once linked, email alone can never transfer an account to another identity.
+    Concurrent first requests converge on the same indexed identity and tenant.
+    """
+    await db_client.ensure_indexes()
+    email = normalize_email(verified_email)
+    for _ in range(3):
+        existing = await get_user_by_clerk_id(clerk_user_id)
+        if existing is not None:
+            return existing
+        legacy = await db_client.users.find_one({"email": email})
+        if legacy is not None:
+            if legacy.get("clerk_user_id") == clerk_user_id:
+                return _document_to_user(legacy)
+            if legacy.get("clerk_user_id") or legacy["status"] != UserStatus.ACTIVE.value:
+                raise ClerkAccountConflictError
+            try:
+                document = await db_client.users.find_one_and_update(
+                    {"_id": legacy["_id"], "clerk_user_id": None, "status": UserStatus.ACTIVE.value},
+                    {"$set": {"clerk_user_id": clerk_user_id, "updated_at": datetime.now(UTC)}},
+                    return_document=ReturnDocument.AFTER,
+                )
+            except DuplicateKeyError:
+                continue
+            if document is not None:
+                return _document_to_user(document)
+        else:
+            user = UserRecord.new(email=email, clerk_user_id=clerk_user_id)
+            try:
+                await db_client.users.insert_one(user.to_document())
+            except DuplicateKeyError:
+                continue
+            return user
+    raise ClerkAccountConflictError
 
 
 async def create_watchlist(
@@ -1450,7 +1462,7 @@ def _document_to_user(document: dict[str, Any]) -> UserRecord:
     return UserRecord(
         _id=document["_id"],
         email=document["email"],
-        password_hash=document["password_hash"],
+        clerk_user_id=document.get("clerk_user_id"),
         created_at=_as_utc(document["created_at"]),
         updated_at=_as_utc(document["updated_at"]),
         status=UserStatus(document["status"]),

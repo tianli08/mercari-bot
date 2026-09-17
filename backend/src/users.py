@@ -23,8 +23,8 @@ class UserPlan(StrEnum):
     FREE = "free"
 
 
-class EmailAlreadyExistsError(Exception):
-    """Raised when a normalized email is already attached to a tenant."""
+class ClerkAccountConflictError(Exception):
+    """Raised when a Clerk identity cannot safely claim a local tenant."""
 
 
 @dataclass(slots=True)
@@ -33,11 +33,11 @@ class UserRecord:
 
     _id: str
     email: str
-    password_hash: str
     created_at: datetime
     updated_at: datetime
     status: UserStatus
     plan: UserPlan
+    clerk_user_id: str | None = None
 
     @property
     def tenant_id(self) -> str:
@@ -49,7 +49,7 @@ class UserRecord:
         cls,
         *,
         email: str,
-        password_hash: str,
+        clerk_user_id: str | None = None,
         status: UserStatus | str = UserStatus.ACTIVE,
         plan: UserPlan | str = UserPlan.FREE,
         created_at: datetime | None = None,
@@ -59,7 +59,7 @@ class UserRecord:
         return cls(
             _id=uuid4().hex,
             email=normalize_email(email),
-            password_hash=password_hash,
+            clerk_user_id=clerk_user_id,
             created_at=timestamp,
             updated_at=timestamp,
             status=UserStatus(status),
@@ -68,15 +68,17 @@ class UserRecord:
 
     def to_document(self) -> dict[str, Any]:
         """Serialize the user for MongoDB storage."""
-        return {
+        document = {
             "_id": self._id,
             "email": self.email,
-            "password_hash": self.password_hash,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "status": self.status.value,
             "plan": self.plan.value,
         }
+        if self.clerk_user_id is not None:
+            document["clerk_user_id"] = self.clerk_user_id
+        return document
 
 
 def normalize_email(email: str) -> str:
