@@ -1,34 +1,28 @@
-"""Typed authentication state and protected-route dependency."""
+"""Resolve verified Clerk sessions to stable application tenants."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Annotated
 
-from fastapi import Request
+from fastapi import Depends
 
+from ... import database
+from ...users import UserRecord, UserStatus
+from .clerk import get_clerk_user_id, get_verified_email
 from .exceptions import AuthenticationRequiredError
 
-_STATE_ATTRIBUTE = "authentication"
 
-
-@dataclass(frozen=True, slots=True)
-class AuthenticationContext:
-    """Trusted identity resolved exclusively from a validated session token."""
-
-    tenant_id: str
-
-
-def set_authentication_context(
-    request: Request,
-    context: AuthenticationContext | None,
-) -> None:
-    """Store validated authentication state on a request."""
-    setattr(request.state, _STATE_ATTRIBUTE, context)
-
-
-def require_tenant_id(request: Request) -> str:
-    """Return the authenticated tenant ID or reject the request."""
-    context = getattr(request.state, _STATE_ATTRIBUTE, None)
-    if not isinstance(context, AuthenticationContext):
+async def require_user(clerk_user_id: Annotated[str, Depends(get_clerk_user_id)]) -> UserRecord:
+    """Authorize an active tenant, preserving existing ownership during migration."""
+    user = await database.get_user_by_clerk_id(clerk_user_id)
+    if user is None:
+        email = await get_verified_email(clerk_user_id)
+        user = await database.link_clerk_user(clerk_user_id, email)
+    if user.status is not UserStatus.ACTIVE:
         raise AuthenticationRequiredError
-    return context.tenant_id
+    return user
+
+
+async def require_tenant_id(user: Annotated[UserRecord, Depends(require_user)]) -> str:
+    """Return the active account's ID for tenant-scoped resource operations."""
+    return user.tenant_id

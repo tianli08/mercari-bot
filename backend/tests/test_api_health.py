@@ -20,8 +20,9 @@ os.environ.setdefault("DESTINATION_SECRET_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY
 os.environ.setdefault("DESIGNER_CHANNEL_ID", "designer")
 os.environ.setdefault("SAVED_CHANNEL_ID", "saved")
 
+from api_resource_helpers import create_app  # noqa: E402
+
 from src import database  # noqa: E402
-from src.api.app import create_app  # noqa: E402
 from src.watchlists import WatchlistNotFoundError  # noqa: E402
 
 _ENGINE_MODULES_AFTER_API_IMPORT = {"discord", "selenium"}.intersection(sys.modules)

@@ -5,10 +5,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from api_resource_helpers import ApiResourceDatabase, client_for, create_destination, signup
+from api_resource_helpers import ApiResourceDatabase, client_for, create_app, create_destination, signup
 
 from src import database
-from src.api.app import create_app
 
 pytestmark = pytest.mark.asyncio
 

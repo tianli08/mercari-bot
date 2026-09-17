@@ -1,9 +1,11 @@
 """Runtime configuration models and environment-backed settings."""
 
+import base64
 import functools
 import glob
 from pathlib import Path
 from typing import ClassVar, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -39,12 +41,13 @@ class Settings(BaseSettings):
     env_files: ClassVar[list[str]] = glob.glob("/etc/config/*.env") + [
         ".env",
         ".env.local",
+        ".env.clerk",
         "channel_id.env",
     ]
     model_config = SettingsConfigDict(
         env_nested_delimiter="__",
         env_file=env_files,
-        extra="allow",
+        extra="ignore",
         hide_input_in_errors=True,
     )
 
@@ -94,20 +97,13 @@ class Settings(BaseSettings):
     api_port: int = 8000
     api_cors_origins: list[str] = ["http://localhost:3000"]
     api_environment: Literal["development", "test", "production"] = "development"
-    jwt_secret: SecretStr = Field(min_length=32)
-    jwt_algorithm: Literal["HS256"] = "HS256"
-    jwt_token_lifetime_seconds: int = Field(default=3600, ge=60, le=86400)
-    jwt_issuer: str = Field(default="mercari-bot-api", min_length=1, max_length=128)
-    jwt_audience: str = Field(default="mercari-bot-dashboard", min_length=1, max_length=128)
-    auth_cookie_name: str = Field(default="mercari_session", pattern=r"^[A-Za-z0-9_-]{1,64}$")
-    auth_cookie_secure: bool = False
-    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    clerk_secret_key: SecretStr | None = None
+    clerk_publishable_key: str | None = None
+    clerk_jwt_key: str | None = None
+    clerk_authorized_parties: list[str] = ["http://localhost:3000"]
     # Keyword cap: read only through ``resolve_tenant_limits`` (see src/limits.py).
     max_keywords_per_user: int = Field(default=100, ge=1, le=10000)
     max_keywords_per_request: int = Field(default=50, ge=1, le=10000)
-    # Auth limiter knobs are global, not per-tenant; plan 3.5.4 reads them directly.
-    auth_rate_limit_attempts: int = Field(default=10, ge=1, le=10000)
-    auth_rate_limit_window_seconds: int = Field(default=60, ge=1, le=86400)
     marketplace_db_name: str | None = None
     listings_collection_name: str | None = None
     alerts_collection_name: str | None = None
@@ -121,13 +117,23 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_authentication_settings(self) -> "Settings":
-        """Reject authentication settings that would make session cookies unsafe."""
-        if "*" in self.api_cors_origins:
-            raise ValueError("API_CORS_ORIGINS cannot use a wildcard when credentials are enabled")
-        if self.api_environment == "production" and not self.auth_cookie_secure:
-            raise ValueError("AUTH_COOKIE_SECURE must be enabled in production")
-        if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure:
-            raise ValueError("SameSite=None authentication cookies must be Secure")
+        """Reject browser origins that would weaken session validation."""
+        for origins in (self.api_cors_origins, self.clerk_authorized_parties):
+            if not origins or "*" in origins:
+                raise ValueError("Authentication origins must be an explicit, non-empty allowlist")
+            for origin in origins:
+                parsed = urlsplit(origin)
+                if (
+                    parsed.scheme not in {"http", "https"}
+                    or not parsed.netloc
+                    or parsed.path
+                    or parsed.query
+                    or parsed.fragment
+                    or parsed.username
+                    or parsed.password
+                    or (self.api_environment == "production" and parsed.scheme != "https")
+                ):
+                    raise ValueError("Authentication origins must be HTTP(S) origins; production requires HTTPS")
         return self
 
     @model_validator(mode="after")
@@ -136,6 +142,28 @@ class Settings(BaseSettings):
         if self.max_keywords_per_request > self.max_keywords_per_user:
             raise ValueError("MAX_KEYWORDS_PER_REQUEST must be less than or equal to MAX_KEYWORDS_PER_USER")
         return self
+
+    @property
+    def clerk_issuer(self) -> str | None:
+        """Derive the trusted issuer from the configured publishable key."""
+        if not self.clerk_publishable_key:
+            return None
+        try:
+            encoded = self.clerk_publishable_key.split("_", 2)[2]
+            host = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True).decode().removesuffix("$")
+            parsed = urlsplit(f"https://{host}")
+            if not host or parsed.hostname != host or parsed.port or parsed.path or parsed.query or parsed.fragment:
+                raise ValueError
+        except (ValueError, IndexError, UnicodeError) as exc:
+            raise ValueError("Invalid CLERK_PUBLISHABLE_KEY") from exc
+        return f"https://{host}"
+
+    def validate_clerk_configuration(self) -> None:
+        """Fail API startup clearly while allowing the background worker to run independently."""
+        if not self.clerk_secret_key or not self.clerk_secret_key.get_secret_value().strip():
+            raise ValueError("CLERK_SECRET_KEY is required for the API")
+        if not self.clerk_issuer:
+            raise ValueError("CLERK_PUBLISHABLE_KEY is required for the API")
 
     @property
     def mongo_database_name(self) -> str:

@@ -89,7 +89,7 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const response = await fetch(apiUrl(path), {
     ...init,
-    credentials: "include",
+    credentials: "omit",
   });
 
   if (!response.ok) {

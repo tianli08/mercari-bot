@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .. import database
 from ..config import settings
-from .auth.middleware import AuthenticationMiddleware
 from .errors import register_exception_handlers
 from .routers import router as api_router
 
@@ -18,8 +17,9 @@ API_PREFIX = "/api/v1"
 
 
 @asynccontextmanager
-async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
     try:
+        settings.validate_clerk_configuration()
         await database.db_client.ensure_indexes()
         yield
     finally:
@@ -36,11 +36,10 @@ def create_app() -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.api_cors_origins,
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    application.add_middleware(AuthenticationMiddleware)
     application.include_router(api_router, prefix=API_PREFIX)
     register_exception_handlers(application)
     return application

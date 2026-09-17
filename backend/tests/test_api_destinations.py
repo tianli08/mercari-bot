@@ -10,13 +10,13 @@ from api_resource_helpers import (
     WEBHOOK_URL,
     ApiResourceDatabase,
     client_for,
+    create_app,
     create_destination,
     signup,
 )
 from httpx import Response
 
 from src import database
-from src.api.app import create_app
 from src.destinations import DestinationRecord, decrypt_webhook_url
 from src.webhook_errors import WebhookPermanentError, WebhookTransientError
 

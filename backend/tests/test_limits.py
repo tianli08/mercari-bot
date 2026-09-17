@@ -17,8 +17,6 @@ from src.limits import resolve_tenant_limits  # noqa: E402
 _LIMIT_ENV_VARS = (
     "MAX_KEYWORDS_PER_USER",
     "MAX_KEYWORDS_PER_REQUEST",
-    "AUTH_RATE_LIMIT_ATTEMPTS",
-    "AUTH_RATE_LIMIT_WINDOW_SECONDS",
 )
 
 
@@ -36,8 +34,6 @@ def test_limit_settings_use_generous_defaults(monkeypatch: pytest.MonkeyPatch) -
 
     assert loaded.max_keywords_per_user == 100
     assert loaded.max_keywords_per_request == 50
-    assert loaded.auth_rate_limit_attempts == 10
-    assert loaded.auth_rate_limit_window_seconds == 60
 
 
 def test_limit_settings_reject_out_of_range_values() -> None:
@@ -46,10 +42,6 @@ def test_limit_settings_reject_out_of_range_values() -> None:
         Settings(max_keywords_per_user=0)
     with pytest.raises(ValidationError, match="max_keywords_per_request"):
         Settings(max_keywords_per_request=0)
-    with pytest.raises(ValidationError, match="auth_rate_limit_attempts"):
-        Settings(auth_rate_limit_attempts=0)
-    with pytest.raises(ValidationError, match="auth_rate_limit_window_seconds"):
-        Settings(auth_rate_limit_window_seconds=0)
     with pytest.raises(ValidationError, match="max_keywords_per_user"):
         Settings(max_keywords_per_user=10001)
 
