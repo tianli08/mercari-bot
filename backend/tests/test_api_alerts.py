@@ -5,10 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from api_resource_helpers import ApiResourceDatabase, client_for, signup
+from api_resource_helpers import ApiResourceDatabase, client_for, create_app, signup
 
 from src import database
-from src.api.app import create_app
 from src.listings import ListingRecord
 
 pytestmark = pytest.mark.asyncio

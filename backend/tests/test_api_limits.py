@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from api_resource_helpers import ApiResourceDatabase, client_for, create_destination, signup
+from api_resource_helpers import ApiResourceDatabase, client_for, create_app, create_destination, signup
 from httpx import AsyncClient
 
 from src import database
-from src.api.app import create_app
 from src.config import settings
 from src.presets import PresetKeywordRecord
 

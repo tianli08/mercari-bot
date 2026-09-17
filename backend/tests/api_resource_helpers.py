@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 from mongomock_motor import AsyncMongoMockClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src import database  # noqa: E402
+from clerk_test_helpers import session_token  # noqa: E402
 
-PASSWORD = "correct horse battery staple"
+from src import database  # noqa: E402
+from src.api.app import create_app as create_app  # noqa: E402
+
 WEBHOOK_TOKEN = "super-secret-webhook-token"
 WEBHOOK_URL = f"https://discord.com/api/webhooks/123456789/{WEBHOOK_TOKEN}"
 
@@ -45,12 +48,12 @@ def client_for(application: object) -> httpx.AsyncClient:
 
 
 async def signup(client: httpx.AsyncClient, email: str) -> dict[str, str]:
-    """Create a tenant through the public API and retain its session cookie."""
-    response = await client.post(
-        "/api/v1/auth/signup",
-        json={"email": email, "password": PASSWORD},
-    )
-    assert response.status_code == 201
+    """Create an offline tenant and attach a token verified by the real SDK."""
+    subject = f"user_{uuid4().hex}"
+    await database.link_clerk_user(subject, email)
+    client.headers["Authorization"] = f"Bearer {session_token(subject)}"
+    response = await client.get("/api/v1/auth/me")
+    assert response.status_code == 200
     return response.json()
 
 
