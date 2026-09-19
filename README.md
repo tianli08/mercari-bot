@@ -19,11 +19,15 @@ The web app lives in `web/` (Node 22, npm). API-dependent behavior expects the b
 
 ```bash
 cd web
-cp .env.example .env.local   # NEXT_PUBLIC_API_BASE_URL; default is the local API
+cp .env.example .env.local   # then add the Clerk settings described below
 npm install
 npm run dev                  # http://localhost:3000
 npm run build                # production build
 ```
+
+### Authentication
+
+Clerk handles signup, login, sessions, email verification, and password recovery.
 
 ## Currently INFRA is being developed.
 
