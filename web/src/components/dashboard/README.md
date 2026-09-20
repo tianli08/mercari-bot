@@ -23,7 +23,9 @@ owner, rather than instantiate another hook or resource cache:
 
 - `destinations`, `watchlists`, `selectedWatchlist`, and `selectWatchlist(id)`.
 - `retryDestinations()` / `retryWatchlists()` for fresh reads. These callbacks
-  are stable and cancel earlier reads of the same collection.
+  are stable and cancel earlier reads of the same collection. They return true
+  only for a successful current read. Destination refreshes are blocked while
+  a destination mutation holds the shared gate.
 - `replaceDestination(saved)` / `replaceWatchlist(saved)` to adopt full
   server-returned records, inserting new IDs and replacing existing IDs.
   They cancel older collection reads. A save does not turn an incomplete or
@@ -46,7 +48,32 @@ against another concurrent full-record response: timestamps and completion
 order alone are not a version protocol. The replace callbacks cancel old reads;
 they do **not** serialize future mutations. Add the shared gate when the first
 mutation feature arrives, and disable conflicting actions while it is held.
-Do the same for overlapping destination save/test operations in 4.4.3.
 
-This shell deliberately adds no write endpoints, monitoring controls, polling,
-health claims, connection form, or onboarding state.
+`DiscordConnectionPanel` and `useDiscordConnection` implement 4.4.3. The panel
+uses the owner's metadata, token and access callbacks. It enables writes only
+after the complete destination collection loads successfully. Each explicit
+save, replacement or test acquires `beginDestinationMutation()` and calls its
+returned release callback in `finally`. A synchronous gate prevents duplicate
+clicks before React rerenders. All destination writes are serialized, including
+writes to different IDs, so an ambiguous write's collection reconciliation
+cannot overwrite another pending mutation. Watchlist reads remain independent.
+
+`destinationMutationPending` disables destination refresh and conflicting
+controls. `reconcileDestinations()` is reserved for the active mutation: it may
+read while the gate is held. Ambiguous create/update responses trigger that read
+without retrying the write. A failed reconciliation leaves the collection in an
+error state; the user must successfully refresh before another write. Refreshed
+metadata cannot prove which secret was stored, and the UI says so.
+
+Webhook URLs exist only in temporary form/request state. Inputs are masked,
+never prefilled from metadata, and cleared after successful or ambiguous saves.
+Cancel/unmount discards form state. API responses are projected to public
+metadata; feature errors use fixed copy rather than server details. No browser
+request goes to Discord, and mount/refresh/save never sends a test automatically.
+Tests use the backend verification endpoint once per explicit click and keep
+the latest action result separate from historical `verified_at`. Successful
+replacement clears the prior URL's test result and adopts returned metadata.
+All mutation responses are ignored after panel unmount or account-access loss.
+
+The dashboard still adds no monitoring controls, polling, health claims, or
+onboarding state. Saved destination IDs are ready for 4.4.4 watchlist creation.

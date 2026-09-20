@@ -32,6 +32,11 @@ export type DashboardReadOptions = {
   signal?: AbortSignal;
 };
 
+export type CreateDestinationInput = { label: string; webhook_url: string };
+export type UpdateDestinationInput =
+  | { label: string; webhook_url?: string }
+  | { label?: string; webhook_url: string };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -46,6 +51,49 @@ function isDestination(value: unknown): value is PublicDestination {
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string"
   );
+}
+
+// Keep only public metadata even if a server accidentally adds private fields.
+function publicDestination(value: PublicDestination): PublicDestination {
+  const { id, type, label, verified_at, created_at, updated_at } = value;
+  return { id, type, label, verified_at, created_at, updated_at };
+}
+
+async function writeDestination(
+  token: string,
+  path: string,
+  method: "POST" | "PATCH",
+  input: CreateDestinationInput | UpdateDestinationInput | undefined,
+  options?: DashboardReadOptions,
+): Promise<PublicDestination> {
+  const response = await apiFetch<unknown>(path, {
+    method,
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(input ? { "Content-Type": "application/json" } : {}),
+    },
+    body: input ? JSON.stringify(input) : undefined,
+    signal: options?.signal,
+  });
+  if (!isDestination(response)) throw new TypeError("Invalid destination response");
+  return publicDestination(response);
+}
+
+/** Writes are never retried here, including explicit test-message requests. */
+export function createDestination(token: string, input: CreateDestinationInput, options?: DashboardReadOptions) {
+  return writeDestination(token, "/destinations", "POST", { label: input.label, webhook_url: input.webhook_url }, options);
+}
+
+export function updateDestination(token: string, id: string, input: UpdateDestinationInput, options?: DashboardReadOptions) {
+  return writeDestination(token, `/destinations/${encodeURIComponent(id)}`, "PATCH", {
+    ...(input.label !== undefined ? { label: input.label } : {}),
+    ...(input.webhook_url !== undefined ? { webhook_url: input.webhook_url } : {}),
+  } as UpdateDestinationInput, options);
+}
+
+export function verifyDestination(token: string, id: string, options?: DashboardReadOptions) {
+  return writeDestination(token, `/destinations/${encodeURIComponent(id)}/verify`, "POST", undefined, options);
 }
 
 function isNullablePrice(value: unknown): value is number | null {
@@ -84,7 +132,7 @@ export async function listDestinations(
   if (!Array.isArray(response) || !response.every(isDestination)) {
     throw new TypeError("Invalid destinations response");
   }
-  return response;
+  return response.map(publicDestination);
 }
 
 /** Preserve normalized filters and keywords exactly as returned by the API. */

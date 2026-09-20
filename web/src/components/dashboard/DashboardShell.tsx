@@ -7,6 +7,7 @@ import { SignOutButton, useAuth } from "@clerk/nextjs";
 import { AccountHome } from "@/components/auth/AccountHome";
 import { Sheet } from "@/components/marketing/Sheet";
 import { useDashboardState, type ResourceState } from "./useDashboardState";
+import { DiscordConnectionPanel } from "./DiscordConnectionPanel";
 
 const hasApplicationApi = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim());
 const actionClass = "min-h-11 border border-ink/25 px-4 py-2 text-[13px] transition-colors hover:border-ink/50 hover:bg-ink/5 disabled:cursor-wait disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink";
@@ -15,7 +16,7 @@ function ResourceSection<T>({ id, title, resource, retry, empty, children }: {
   id: string;
   title: string;
   resource: ResourceState<T>;
-  retry: () => Promise<void>;
+  retry: () => Promise<unknown>;
   empty: string;
   children: ReactNode;
 }) {
@@ -68,14 +69,7 @@ function ApplicationDashboard({ getToken, retryAccount, welcome }: {
   const selectedDestination = destinations.data?.find((record) => record.id === selectedWatchlist?.destination_id);
   return <div className="min-w-0 space-y-6">
     {welcome && <p role="status" className="text-ink-dim">Your account is ready.</p>}
-    <ResourceSection id="destinations-heading" title="Destinations" resource={destinations} retry={dashboard.retryDestinations} empty="No destinations saved yet.">
-      <ul className="divide-y divide-dashed divide-ink/20">
-        {destinations.data?.map((destination) => <li key={destination.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3 first:pt-0 last:pb-0">
-          <span className="min-w-0 [overflow-wrap:anywhere]">{destination.label}</span>
-          <span className="text-[12px] text-ink-dim">Discord</span>
-        </li>)}
-      </ul>
-    </ResourceSection>
+    <DiscordConnectionPanel state={{ ...dashboard, accessSignal: access.signal }} />
     <ResourceSection id="watchlists-heading" title="Watchlists" resource={watchlists} retry={dashboard.retryWatchlists} empty="No watchlists saved yet.">
       <div className="space-y-5">
         <div className="space-y-2">
