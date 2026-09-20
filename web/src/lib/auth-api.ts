@@ -7,9 +7,10 @@ export type PublicUser = {
   plan: "free";
 };
 
-export function getCurrentUser(token: string): Promise<PublicUser> {
+export function getCurrentUser(token: string, options?: { signal?: AbortSignal }): Promise<PublicUser> {
   return apiFetch<PublicUser>("/auth/me", {
     cache: "no-store",
     headers: { Authorization: `Bearer ${token}` },
+    signal: options?.signal,
   });
 }

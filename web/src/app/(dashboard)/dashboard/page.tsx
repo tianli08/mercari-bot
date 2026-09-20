@@ -1,24 +1,29 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { AccountHome } from "@/components/auth/AccountHome";
+import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { Logo } from "@/components/marketing/Logo";
-import { Sheet } from "@/components/marketing/Sheet";
 import { PRODUCT_NAME } from "@/lib/marketing-content";
 
 export const metadata: Metadata = {
-  title: `Your account — ${PRODUCT_NAME}`,
+  title: `Your dashboard — ${PRODUCT_NAME}`,
   robots: { index: false, follow: false },
 };
 
 export default function DashboardPage() {
   return (
-    <div className="flex min-h-svh flex-col items-center justify-center gap-8 bg-background px-5 py-12 text-foreground">
-      <Logo />
-      <main className="w-full max-w-[400px]">
-        <Sheet className="px-6 py-8 sm:px-9 sm:py-10">
-          <Suspense fallback={<p role="status" className="text-center text-[13px] text-ink-dim">Loading your account…</p>}><AccountHome /></Suspense>
-        </Sheet>
-      </main>
+    <div className="min-h-svh bg-background px-5 py-8 text-foreground sm:px-8 sm:py-12">
+      <div className="mx-auto w-full max-w-6xl">
+        <header className="mb-10 border-b border-dashed border-ink/30 pb-6"><Logo /></header>
+        <main className="min-w-0">
+          <div className="mb-8 space-y-2">
+            <h1 className="text-[28px] uppercase tracking-[0.06em] sm:text-[36px]">Your dashboard</h1>
+            <p className="text-[13px] text-ink-dim">Your saved connections and watchlists.</p>
+          </div>
+          <Suspense fallback={<p role="status" className="text-[13px] text-ink-dim">Loading your account…</p>}>
+            <DashboardShell />
+          </Suspense>
+        </main>
+      </div>
     </div>
   );
 }
