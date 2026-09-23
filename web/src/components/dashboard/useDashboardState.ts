@@ -23,6 +23,7 @@ type DashboardState = {
   destinations: ResourceState<PublicDestination>;
   watchlists: ResourceState<PublicWatchlist>;
   selectedWatchlistId: string | null;
+  destinationMutationPending: boolean;
 };
 
 function initialState(): DashboardState {
@@ -31,6 +32,7 @@ function initialState(): DashboardState {
     destinations: { status: "loading", data: null, error: null },
     watchlists: { status: "loading", data: null, error: null },
     selectedWatchlistId: null,
+    destinationMutationPending: false,
   };
 }
 
@@ -72,6 +74,7 @@ export function useDashboardState(getToken: () => Promise<string | null>) {
     controller: AbortController;
     destinations: AbortController | null;
     watchlists: AbortController | null;
+    destinationMutation: symbol | null;
   } | null>(null);
   const getScope = useCallback(() => {
     const scope = scopeRef.current;
@@ -110,9 +113,9 @@ export function useDashboardState(getToken: () => Promise<string | null>) {
     }
   }, [currentToken, reportAccessFailure, getScope]);
 
-  const readResource = useCallback(async (resource: "destinations" | "watchlists") => {
+  const readResource = useCallback(async (resource: "destinations" | "watchlists", duringMutation = false): Promise<boolean> => {
     const scope = getScope();
-    if (!scope?.authorized) return;
+    if (!scope?.authorized || (resource === "destinations" && scope.destinationMutation && !duringMutation)) return false;
     scope[resource]?.abort();
     const controller = new AbortController();
     scope[resource] = controller;
@@ -123,7 +126,7 @@ export function useDashboardState(getToken: () => Promise<string | null>) {
     }));
     try {
       const token = await getCurrentToken();
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       if (resource === "destinations") {
         const data = await listDestinations(token, { signal: controller.signal });
         if (isCurrent()) setState((previous) => ({ ...previous, destinations: { status: "loaded", data, error: null } }));
@@ -135,8 +138,9 @@ export function useDashboardState(getToken: () => Promise<string | null>) {
           selectedWatchlistId: selectExisting(data, previous.selectedWatchlistId),
         }));
       }
+      return isCurrent();
     } catch (error) {
-      if (!isCurrent() || reportAccessFailure(error)) return;
+      if (!isCurrent() || reportAccessFailure(error)) return false;
       setState((previous) => ({
         ...previous,
         [resource]: {
@@ -145,6 +149,7 @@ export function useDashboardState(getToken: () => Promise<string | null>) {
           error: `We couldn’t load your ${resource}. Please try again.`,
         },
       }));
+      return false;
     }
   }, [getCurrentToken, reportAccessFailure, getScope]);
 
@@ -157,6 +162,7 @@ export function useDashboardState(getToken: () => Promise<string | null>) {
       controller: new AbortController(),
       destinations: null as AbortController | null,
       watchlists: null as AbortController | null,
+      destinationMutation: null as symbol | null,
     };
     scopeRef.current = scope;
     const signal = scope.controller.signal;
@@ -221,6 +227,29 @@ export function useDashboardState(getToken: () => Promise<string | null>) {
 
   const retryDestinations = useCallback(() => readResource("destinations"), [readResource]);
   const retryWatchlists = useCallback(() => readResource("watchlists"), [readResource]);
+  const reconcileDestinations = useCallback(() => readResource("destinations", true), [readResource]);
+
+  // Serialize destination writes through reconciliation. This also prevents a
+  // collection refresh from restoring metadata from an older webhook version.
+  const beginDestinationMutation = useCallback(() => {
+    const scope = getScope();
+    if (!scope?.authorized || scope.destinationMutation) return null;
+    const operation = Symbol();
+    scope.destinationMutation = operation;
+    scope.destinations?.abort();
+    setState((previous) => ({
+      ...previous,
+      destinationMutationPending: true,
+      destinations: previous.destinations.status === "loading"
+        ? { ...previous.destinations, status: previous.destinations.data === null ? "error" : "loaded", error: previous.destinations.data === null ? "Refresh to load your destinations." : null }
+        : previous.destinations,
+    }));
+    return () => {
+      if (!scope.active || !scope.authorized || scope.destinationMutation !== operation) return;
+      scope.destinationMutation = null;
+      setState((previous) => ({ ...previous, destinationMutationPending: false }));
+    };
+  }, [getScope]);
 
   return {
     ...state,
@@ -232,6 +261,8 @@ export function useDashboardState(getToken: () => Promise<string | null>) {
     replaceWatchlist,
     getCurrentToken,
     reportAccessFailure,
+    beginDestinationMutation,
+    reconcileDestinations,
     // Future protected polling/mutations must also stop on this signal.
     accessSignal: state.access.status === "ready" ? state.access.signal : undefined,
   };

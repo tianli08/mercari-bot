@@ -29,7 +29,7 @@ export const fixtures = loadSource("tests/fixtures/dashboard-responses.ts");
 
 // A small hook lifecycle driver for the existing Node runner. Render tests use
 // React separately; this exercises asynchronous requests, cleanup and callbacks.
-export function mountDashboard(overrides = {}) {
+export function mountHook(load) {
   const slots = [];
   let cursor = 0;
   let mounted = true;
@@ -70,6 +70,28 @@ export function mountDashboard(overrides = {}) {
       }
     },
   };
+  const render = load(hooks);
+  function RenderHook() {
+    cursor = 0;
+    value = render();
+    while (effects.length) effects.shift()();
+  }
+  RenderHook();
+  return {
+    get value() { return value; },
+    get settersAfterUnmount() { return settersAfterUnmount; },
+    render: RenderHook,
+    replayEffects() {
+      for (const slot of slots) if (slot?.cleanup) { slot.cleanup(); slot.cleanup = slot.callback(); }
+    },
+    unmount() {
+      mounted = false;
+      for (const slot of slots) slot?.cleanup?.();
+    },
+  };
+}
+
+export function mountDashboard(overrides = {}) {
   const calls = [];
   let tokenNumber = 0;
   const getToken = overrides.getToken ?? (async () => `token-${++tokenNumber}`);
@@ -79,31 +101,23 @@ export function mountDashboard(overrides = {}) {
       return (overrides[name] ?? fallback)(...args);
     };
   }
-  const { useDashboardState } = loadSource("src/components/dashboard/useDashboardState.ts", {
-    react: hooks,
-    "@/lib/api": { ApiError },
-    "@/lib/auth-api": { getCurrentUser: api("account", async () => ({ id: "account-a", email: "a@example.com", status: "active", plan: "free" })) },
-    "@/lib/dashboard-api": {
-      listDestinations: api("destinations", async () => fixtures.destinations),
-      listWatchlists: api("watchlists", async () => fixtures.watchlists),
-    },
+  const hook = mountHook((hooks) => {
+    const { useDashboardState } = loadSource("src/components/dashboard/useDashboardState.ts", {
+      react: hooks,
+      "@/lib/api": { ApiError },
+      "@/lib/auth-api": { getCurrentUser: api("account", async () => ({ id: "account-a", email: "a@example.com", status: "active", plan: "free" })) },
+      "@/lib/dashboard-api": {
+        listDestinations: api("destinations", async () => fixtures.destinations),
+        listWatchlists: api("watchlists", async () => fixtures.watchlists),
+      },
+    });
+    return () => useDashboardState(getToken);
   });
-  function RenderHook() {
-    cursor = 0;
-    value = useDashboardState(getToken);
-    while (effects.length) effects.shift()();
-  }
-  RenderHook();
   return {
-    get value() { return value; },
-    get settersAfterUnmount() { return settersAfterUnmount; },
+    get value() { return hook.value; },
+    get settersAfterUnmount() { return hook.settersAfterUnmount; },
     calls,
-    replayEffects() {
-      for (const slot of slots) if (slot?.cleanup) { slot.cleanup(); slot.cleanup = slot.callback(); }
-    },
-    unmount() {
-      mounted = false;
-      for (const slot of slots) slot?.cleanup?.();
-    },
+    replayEffects: hook.replayEffects,
+    unmount: hook.unmount,
   };
 }

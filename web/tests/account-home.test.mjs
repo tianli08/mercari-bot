@@ -14,6 +14,12 @@ function dashboardFixture({ apiBase, access = { status: "ready" }, auth = {}, re
   };
   const account = loadSource("src/components/auth/AccountHome.tsx", { "@clerk/nextjs": clerk });
   const sheet = loadSource("src/components/marketing/Sheet.tsx");
+  const connection = loadSource("src/components/dashboard/useDiscordConnection.ts", {
+    "@/lib/api": {}, "@/lib/dashboard-api": {},
+  });
+  const panel = loadSource("src/components/dashboard/DiscordConnectionPanel.tsx", {
+    "@/components/marketing/Sheet": sheet, "./useDiscordConnection": connection,
+  });
   const state = {
     access,
     destinations: { status: "loaded", data: fixtures.destinations, error: null },
@@ -30,6 +36,7 @@ function dashboardFixture({ apiBase, access = { status: "ready" }, auth = {}, re
     "@/components/auth/AccountHome": account,
     "@/components/marketing/Sheet": sheet,
     "./useDashboardState": { useDashboardState: () => { calls.dashboard++; return state; } },
+    "./DiscordConnectionPanel": panel,
   };
   const { DashboardShell } = loadSource("src/components/dashboard/DashboardShell.tsx", modules, { NEXT_PUBLIC_API_BASE_URL: apiBase });
   return { html: renderToStaticMarkup(React.createElement(DashboardShell)), calls, modules };
